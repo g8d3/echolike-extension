@@ -1,0 +1,190 @@
+{
+  "extName": {
+    "message": "EchoLike",
+    "description": "Extension name"
+  },
+  "extDescription": {
+    "message": "Send your X likes and bookmarks, with an optional voice or written note, to your EchoLike inbox instantly. End-to-end encrypted.",
+    "description": "Extension description (must stay under 132 chars)"
+  },
+  "connectUrl": {
+    "message": "https://t.me/nova_radar_99_bot",
+    "description": "Private page URL"
+  },
+  "toastSent": {
+    "message": "EchoLike ✓ sent ($1, $2 ms)",
+    "description": "Toast after an event is sent; $1=kind, $2=ms"
+  },
+  "toastReceived": {
+    "message": "EchoLike ✓ received in your inbox",
+    "description": "Toast when the server confirms receipt"
+  },
+  "noResponseBackground": {
+    "message": "no response from background",
+    "description": "Error when background gives no response"
+  },
+  "keptInQueue": {
+    "message": "(kept in queue)",
+    "description": "Suffix when an event stays queued"
+  },
+  "extUpdatedReload": {
+    "message": "EchoLike: the extension was updated, reload the page",
+    "description": "Toast when content script is outdated"
+  },
+  "toastNoMic": {
+    "message": "EchoLike 🎙 no microphone: $1",
+    "description": "Toast when microphone fails; $1=error"
+  },
+  "micTitle": {
+    "message": "EchoLike: voice note (click to record / stop)",
+    "description": "Mic button tooltip"
+  },
+  "penTitle": {
+    "message": "EchoLike: written note",
+    "description": "Pen button tooltip"
+  },
+  "switchToVoice": {
+    "message": "Switch to voice note",
+    "description": "Mic button tooltip inside the note box"
+  },
+  "notePlaceholder": {
+    "message": "EchoLike: why did you like it? (Enter saves · Shift+Enter new line · Esc cancels)",
+    "description": "Note box placeholder"
+  },
+  "save": {
+    "message": "Save",
+    "description": "Save button in the note box"
+  },
+  "errInvalidCode": {
+    "message": "invalid code: must be EL2|server|topic|key",
+    "description": "Invalid pairing code format"
+  },
+  "errInvalidServer": {
+    "message": "invalid server",
+    "description": "Invalid server URL"
+  },
+  "errInvalidKey": {
+    "message": "invalid key (not 32 bytes)",
+    "description": "Invalid encryption key length"
+  },
+  "errKeyNotBase64": {
+    "message": "key is not base64",
+    "description": "Key is not base64"
+  },
+  "errNtfy429": {
+    "message": "ntfy 429: paused for 10 min (ntfy.sh limit, queue is kept)",
+    "description": "Rate limited by ntfy"
+  },
+  "errAck429": {
+    "message": "ack 429: paused (ntfy.sh limit)",
+    "description": "Ack fetch rate limited"
+  },
+  "errUnauthorizedOrigin": {
+    "message": "unauthorized origin",
+    "description": "External message from unknown origin"
+  },
+  "micLabel": {
+    "message": "Voice note 🎙 button on every post",
+    "description": "Popup mic checkbox label"
+  },
+  "sendTest": {
+    "message": "Send test",
+    "description": "Popup send-test button"
+  },
+  "connectBrowser": {
+    "message": "Pair with the bot",
+    "description": "Popup connect button"
+  },
+  "todayActivity": {
+    "message": "Today's activity",
+    "description": "Popup today heading"
+  },
+  "latestEvents": {
+    "message": "Latest events",
+    "description": "Popup events heading"
+  },
+  "receivedHint": {
+    "message": "(✓ received = already in your inbox)",
+    "description": "Hint next to Latest events"
+  },
+  "footerTrouble": {
+    "message": "Nothing arriving? Copy your code above and send /par + code to the $1, then reload x.com.",
+    "description": "Footer help; $1=private page link text"
+  },
+  "privatePage": {
+    "message": "Telegram bot",
+    "description": "Link text for the private page"
+  },
+  "notConnected": {
+    "message": "Not connected.",
+    "description": "Status when no valid code"
+  },
+  "connectOneClick": {
+    "message": "Pair it with the bot",
+    "description": "Link text to connect"
+  },
+  "statusConnected": {
+    "message": "✓ Connected — your likes arrive on their own",
+    "description": "Status when connected"
+  },
+  "statusNoConfirm": {
+    "message": "No confirmation from the server yet.",
+    "description": "Status when no receipt yet"
+  },
+  "lastLabel": {
+    "message": "Last:",
+    "description": "Label for the last event"
+  },
+  "nothingSentYet": {
+    "message": "Nothing sent yet",
+    "description": "Empty state"
+  },
+  "pendingRetry": {
+    "message": "$1 waiting to send (retries automatically)",
+    "description": "Pending queue; $1=count"
+  },
+  "lastConfirm": {
+    "message": "last confirmation $1",
+    "description": "Last ack time; $1=time"
+  },
+  "sendingTest": {
+    "message": "Sending test…",
+    "description": "Sending test status"
+  },
+  "todayCounter": {
+    "message": "likes: $1 · bookmarks: $2",
+    "description": "Today counter; $1=likes $2=bookmarks"
+  },
+  "stateQueued": {
+    "message": "queued",
+    "description": "Label for stored state en cola"
+  },
+  "stateSent": {
+    "message": "✓ sent",
+    "description": "Label for stored state enviado"
+  },
+  "stateReceived": {
+    "message": "✓ received",
+    "description": "Label for stored state recibido"
+  },
+  "stateError": {
+    "message": "error",
+    "description": "Label for stored state error"
+  },
+  "openPrivateConnect": {
+    "message": "Copy your code below and send /par to the bot.",
+    "description": "Link text in the popup status when the server has not confirmed yet"
+  },
+  "parCodeTitle": {
+    "message": "Your extension code — click to copy",
+    "description": "pairing via /par"
+  },
+  "parHint": {
+    "message": "Send /par followed by this code to the bot. No codes to memorize after that.",
+    "description": "pairing via /par"
+  },
+  "copied": {
+    "message": "Copied ✓",
+    "description": "pairing via /par"
+  }
+}

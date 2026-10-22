@@ -1,0 +1,76 @@
+{
+  "manifest_version": 3,
+  "name": "__MSG_extName__",
+  "version": "2.6.2",
+  "default_locale": "en",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAoWO2b54p8C7RoY1bVQO+mVKZ+xoy+GnmcQ9YmClVIV7OtxDWy3DNYHR0j66haX59U2xU/3K19PsZ/wbynI5xOAz1mI+58xnvvEkUg0m/vyc9ob4uVQA1W0+s3Opw1faB483WMjqUmTemP7qH5ZJdbl0hS4+VTb2ebuT5KmCJMDe43vjK2wKMUTZ8NRzDovIqVRHVQuJBPuzr9/K92FDk1z+pMPI8A0nMVUuRVadH/kdJiH3w8BkgX5mAVyG2S2DOM6Jkbmc6baoJ5r8eugS3n9SbC0eTmVrOsksNPQVYbLHwmt5Z+q8U5ct+D9wHDfrm8evMbJlSjobwLmYyyEqZbQIDAQAB",
+  "update_url": "https://echolike.app/extension_update.json",
+  "description": "__MSG_extDescription__",
+  "externally_connectable": {
+    "matches": [
+      "https://echolike.app/*"
+    ]
+  },
+  "permissions": [
+    "storage",
+    "alarms",
+    "scripting",
+    "tabs",
+    "clipboardWrite"
+  ],
+  "host_permissions": [
+    "https://ntfy.sh/*",
+    "https://x.com/*",
+    "https://twitter.com/*",
+    "https://mobile.x.com/*",
+    "https://mobile.twitter.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "scripts": [
+      "background.js"
+    ]
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://x.com/*",
+        "https://twitter.com/*",
+        "https://mobile.x.com/*",
+        "https://mobile.twitter.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "action": {
+    "default_title": "__MSG_extName__",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png"
+    }
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "echolike@nova-radar",
+      "strict_min_version": "121.0"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

@@ -1,0 +1,13 @@
+.echolike-mic{background:none;border:0;cursor:pointer;font-size:15px;opacity:.55;padding:0 6px}
+.echolike-mic:hover{opacity:1}.echolike-mic.rec{opacity:1;color:#f4212e;animation:elp 1s infinite}
+@keyframes elp{50%{opacity:.4}}
+#echolike-toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:2147483647;padding:10px 16px;border-radius:20px;font:600 14px system-ui;color:#fff;transition:opacity .3s;pointer-events:none}#echolike-toast.ok{background:#00ba7c}#echolike-toast.err{background:#f4212e}
+.echolike-pen{background:none;border:0;cursor:pointer;font-size:15px;opacity:0;padding:0 6px;color:inherit;transition:opacity .15s}
+article:hover .echolike-pen,.echolike-pen:focus{opacity:.6}.echolike-pen:hover{opacity:1}
+@media (pointer:coarse){.echolike-pen{opacity:.5}}
+.echolike-nota{margin:6px 0 4px;padding:8px;border:1px solid rgba(127,127,127,.35);border-radius:12px;background:rgba(127,127,127,.06)}
+.echolike-nota textarea{width:100%;box-sizing:border-box;resize:vertical;min-height:44px;border:0;outline:0;background:transparent;color:inherit;font:15px/1.35 system-ui}
+.echolike-nota-pie{display:flex;justify-content:flex-end;gap:8px;align-items:center;margin-top:4px}
+.echolike-nota-pie button{border:0;border-radius:16px;padding:4px 12px;font:600 13px system-ui;cursor:pointer}
+.echolike-nota-ok{background:#1d9bf0;color:#fff}.echolike-nota-no{background:transparent;color:inherit;opacity:.6}
+.echolike-nota-mic{opacity:1;font-size:17px;background:transparent!important}
