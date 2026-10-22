@@ -176,7 +176,7 @@
     "description": "Link text in the popup status when the server has not confirmed yet"
   },
   "parCodeTitle": {
-    "message": "Your extension code — click to copy",
+    "message": "Your extension code",
     "description": "pairing via /par"
   },
   "parHint": {
@@ -186,5 +186,13 @@
   "copied": {
     "message": "Copied ✓",
     "description": "pairing via /par"
+  },
+  "copyCode": {
+    "message": "Copy code",
+    "description": "pairing copy button"
+  },
+  "never": {
+    "message": "never",
+    "description": "no confirmation yet"
   }
 }
