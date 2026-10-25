@@ -1,4 +1,4 @@
-// EchoLike v2.2 — content script (notas escritas: mantener ~500 ms, tecla N, ✎) en x.com. Detecta clics en Like/Bookmark y los manda al background.
+// EchoLike v2.2 — content script (notas escritas: mantener ~500 ms, tecla N, ✎) en x.com. Detecta clics en Like/Bookmark y los manda al background (que los guarda en local; solo los envía si el usuario activó sync).
 (function (root) {
   const ACCIONES = { like: "like", unlike: "unlike", bookmark: "bookmark", removeBookmark: "unbookmark" };
 
@@ -94,6 +94,7 @@
         const le = ext.runtime.lastError;
         if (le || !r) return toast("EchoLike ✗ " + ((le && le.message) || t("noResponseBackground")), false);
         if (!r.ok) return toast("EchoLike ✗ " + r.error + " " + t("keptInQueue"), false);
+        if (r.local) return toast(t("toastSaved", [item.kind]), true);   // local-first: guardado en este navegador, no se envió
         toast(t("toastSent", [item.kind, String(Math.round(performance.now() - t0))]), true);
         setTimeout(() => ext.runtime.sendMessage({ tipo: "acuses" }, (a) => {
           if (!ext.runtime.lastError && a && a.ok && a.uids.includes(r.uid)) toast(t("toastReceived"), true);

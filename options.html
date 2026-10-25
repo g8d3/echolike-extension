@@ -1,16 +1,13 @@
-<!doctype html><meta charset="utf-8"><title>EchoLike</title>
-<style>body{font:13px system-ui;width:360px;margin:12px}button{font:inherit;padding:6px;box-sizing:border-box;margin:3px 0}button{width:49%}
-#estado{margin:6px 0;padding:8px;border-radius:8px;background:#f2f2f2}.ok{color:#00875a}.err{color:#d0021b}.rec{color:#1d9bf0;font-weight:600}.warn{color:#b26a00}
-table{width:100%;border-collapse:collapse;font-size:12px}td{border-top:1px solid #eee;padding:3px 2px;vertical-align:top}small{color:#666}
-a.btn{display:inline-block;text-align:center;width:98%;padding:6px;background:#1d9bf0;color:#fff;border-radius:6px;text-decoration:none;margin:3px 0}</style>
-<h3 style="margin:0 0 6px">EchoLike v<span id=ver>2.5</span></h3>
-<div id="estado">—</div>
-<div id="parbox" style="display:none;margin:6px 0;padding:8px;border-radius:8px;background:#eef4ff"><b data-i18n="parCodeTitle">Your extension code — click to copy</b><br><code id="codigo" style="word-break:break-all;cursor:pointer">—</code> <span id="copiado"></span><br><small data-i18n="parHint">Send /par followed by this code to the bot.</small></div>
-<label><input id="mic" type="checkbox"> <span data-i18n="micLabel">Voice note 🎙 button on every post</span></label><br>
-<button id="probar" data-i18n="sendTest">Send test</button>
-<a class="btn connectLink" href="https://echolike.app/private/" target="_blank" id="conectar" data-i18n="connectBrowser">Connect this browser</a>
-<div style="margin-top:6px"><b data-i18n="todayActivity">Today's activity</b><div id="hoy">—</div></div>
-<b data-i18n="latestEvents">Latest events</b> <small data-i18n="receivedHint">(✓ received = already in your inbox)</small>
-<table id="ev"></table>
-<small id="pie" data-i18n="footerTrouble">Nothing arriving? Open the <a class="connectLink" href="https://echolike.app/private/" target="_blank">private page</a>, press Connect and reload x.com.</small>
-<script src="popup.js"></script>
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>EchoLike — your data</title>
+<style>body{font:15px system-ui;max-width:640px;margin:16px auto;padding:0 12px;line-height:1.45}button,label.btn{font:inherit;padding:10px 14px;margin:4px 0;border-radius:8px;border:1px solid #ccc;background:#fff;cursor:pointer;display:inline-block}
+.box{padding:12px;border-radius:10px;background:#f4f6f8;margin:12px 0}.ok{color:#00875a}.err{color:#d0021b}small{color:#555}</style>
+<h2>EchoLike <small>v<span id="ver"></span></small></h2>
+<div class="box"><b data-i18n="privacyTitle">Where your data lives</b><p data-i18n="privacyLong">Everything EchoLike records (likes, bookmarks, written and voice notes) is stored in this browser's own extension storage. With sync off, the extension makes no network requests of its own. You can export a copy at any time, and delete it by removing the extension.</p>
+<p id="nlocal"></p></div>
+<div class="box"><b data-i18n="syncTitle">Sync (optional)</b><p data-i18n="syncLong">If you turn sync on, each event is encrypted in this browser (AES-256-GCM) with a key only this browser and your paired inbox hold, then relayed through ntfy.sh to the EchoLike inbox you pair with. The relay only sees unreadable text.</p>
+<label><input id="sync" type="checkbox"> <span data-i18n="syncLabel">Sync to my EchoLike inbox (encrypted, off by default)</span></label></div>
+<div class="box"><b data-i18n="backupTitle">Backup</b><br>
+<button id="exportar" type="button" data-i18n="exportJson">Export JSON</button>
+<label class="btn"><span data-i18n="importJson">Import JSON</span><input id="importar" type="file" accept="application/json,.json" style="display:none"></label>
+<div id="msg"></div><small data-i18n="exportHint">The export contains your items only, never your sync key.</small></div>
+<script src="options.js"></script>

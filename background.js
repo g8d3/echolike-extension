@@ -1,4 +1,5 @@
-// EchoLike v2.2 — background: cola persistente, cifra (AES-GCM), publica en ntfy.sh, lee acuses del receptor.
+// EchoLike v2.7 — background. Local-first: todo se guarda en storage.local de este navegador y NADA sale de él
+// salvo que el usuario active «sync» (opt-in). Con sync: cola persistente, cifra (AES-GCM), publica en ntfy.sh, lee acuses del receptor.
 const ext = typeof browser !== "undefined" ? browser : chrome;
 const t = (k, s) => { try { const m = ext && ext.i18n && ext.i18n.getMessage(k, s); if (m) return m; } catch (e) {} return k; };
 const b64 = (u8) => { let s = ""; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
@@ -14,8 +15,10 @@ function parseCodigo(raw) {
   try { if (unb64(clave).length !== 32) return { error: t("errInvalidKey") }; } catch (e) { return { error: t("errKeyNotBase64") }; }
   return { servidor, topic, clave };
 }
+async function syncOn() { await migrar(); return !!(await ext.storage.local.get({ sync: false })).sync; }
 async function cfg() {
-  let c = await ext.storage.local.get({ codigo: "" });
+  let c = await ext.storage.local.get({ codigo: "", sync: false });
+  if (!c.codigo && !c.sync) return { error: t("errSyncOff") };   // sin sync no se crean credenciales ni se habla con ningún servidor
   if (!c.codigo) { // primer arranque: genera sus credenciales; el usuario las activa con /par en el bot (nadie memoriza nada)
     c.codigo = "EL2|https://ntfy.sh|el2_" + crypto.randomUUID().replace(/-/g, "") + "|" + b64(crypto.getRandomValues(new Uint8Array(32)));
     await ext.storage.local.set({ codigo: c.codigo });
@@ -44,7 +47,7 @@ async function anotar(item, estado, error) {
   if (!(ev.estado === "recibido" && estado !== "recibido")) ev.estado = estado;
   ev.error = error || null; ev.t = new Date().toISOString();
   await ext.storage.local.set({ eventos: st.eventos.slice(0, MAXEV), ultimo: ev });
-  if (estado === "en cola" && (item.kind === "like" || item.kind === "bookmark")) { // contador «hoy» (fecha local)
+  if ((estado === "en cola" || estado === "guardado") && (item.kind === "like" || item.kind === "bookmark")) { // contador «hoy» (fecha local)
     const s = await ext.storage.local.get({ hoy: null }); const d = new Date().toLocaleDateString("en-CA");
     const h = s.hoy && s.hoy.d === d ? s.hoy : { d, likes: 0, bookmarks: 0 };
     h[item.kind === "like" ? "likes" : "bookmarks"]++;
@@ -80,11 +83,39 @@ async function vaciar() {
   })();
   try { return await vaciando; } finally { vaciando = null; }
 }
+// ---- Almacén local (fuente de verdad): lista de items en storage.local["datos"] ----
+let guardando = Promise.resolve();
+function guardarLocal(item) {
+  guardando = guardando.then(async () => {
+    const { datos } = await ext.storage.local.get({ datos: [] });
+    if (!datos.some((d) => d.uid === item.uid)) { datos.push(Object.assign({ saved_at: new Date().toISOString() }, item)); await ext.storage.local.set({ datos }); }
+  }).catch(() => {});
+  return guardando;
+}
+const FORMATO = "echolike-export";
+async function exportar() {
+  const { datos } = await ext.storage.local.get({ datos: [] });
+  return { ok: true, data: { format: FORMATO, format_version: 1, extension_version: ext.runtime.getManifest().version, exported_at: new Date().toISOString(), count: datos.length, items: datos } };
+}
+async function importar(obj) {
+  if (!obj || obj.format !== FORMATO || !Array.isArray(obj.items)) return { ok: false, error: t("errImportFormat") };
+  let n = 0;
+  await (guardando = guardando.then(async () => {
+    const { datos } = await ext.storage.local.get({ datos: [] }); const vistos = new Set(datos.map((d) => d.uid));
+    for (const it of obj.items) if (it && typeof it === "object" && it.uid && typeof it.kind === "string" && !vistos.has(it.uid)) { datos.push(it); vistos.add(it.uid); n++; }
+    await ext.storage.local.set({ datos });
+  }));
+  return { ok: true, added: n, total: obj.items.length };
+}
 async function enviar(item) {
-  item.uid = item.uid || crypto.randomUUID(); await anotar(item, "en cola"); await encolar(item);
+  item.uid = item.uid || crypto.randomUUID();
+  if (item.kind !== "ping") await guardarLocal(item);
+  if (!(await syncOn())) { if (item.kind === "ping") return { ok: false, uid: item.uid, error: t("errSyncOff") }; await anotar(item, "guardado"); return { ok: true, uid: item.uid, local: true }; }
+  await anotar(item, "en cola"); await encolar(item);
   const r = await vaciar(); return Object.assign({ uid: item.uid }, r);
 }
 async function acuses() {
+  if (!(await syncOn())) return { ok: true, uids: [], nuevos: 0, local: true };
   const c = await cfg(); if (c.error) return { ok: false, error: c.error };
   const r = await fetch(`${c.servidor}/${c.topic}_ack/json?poll=1&since=6h`);
   if (r.status === 429) return { ok: false, error: t("errAck429") };
@@ -102,19 +133,36 @@ ext.runtime.onMessage.addListener((m, _s, responder) => {
   const p = m && m.tipo === "item" ? enviar(m.item)
     : m && m.tipo === "prueba" ? enviar({ v: 2, kind: "ping", prueba: true, clicked_at: new Date().toISOString() })
     : m && m.tipo === "acuses" ? acuses()
-    : m && m.tipo === "validar" ? Promise.resolve(parseCodigo(m.codigo)) : null;
+    : m && m.tipo === "validar" ? Promise.resolve(parseCodigo(m.codigo))
+    : m && m.tipo === "exportar" ? exportar()
+    : m && m.tipo === "importar" ? importar(m.data)
+    : m && m.tipo === "sync" ? ext.storage.local.set({ sync: !!m.on }).then(() => m.on ? cfg() : null).then(() => ({ ok: true, sync: !!m.on })) : null;
   if (!p) return;
   p.then(responder, (e) => responder({ ok: false, error: String(e && e.message || e) })); return true;
 });
+// Migración a 2.7 (local-first), en cada arranque hasta decidirla una vez: quien ya enviaba en ≤2.6.3
+// (tiene código + eventos enviados/recibidos) conserva el sync encendido. Instalación nueva: apagado (2.7 no crea código).
+let migrada = null;
+function migrar() {
+  return migrada = migrada || (async () => {
+    const st = await ext.storage.local.get(["sync", "codigo", "eventos"]);
+    if (st.sync !== undefined) return;
+    const yaEnviaba = !!st.codigo && (st.eventos || []).some((e) => e.estado === "recibido" || (e.estado === "enviado" && e.kind !== "ping"));
+    await ext.storage.local.set({ sync: yaEnviaba });
+  })();
+}
+migrar();
 function alarmas() { ext.alarms.create("latido", { periodInMinutes: 30 }); ext.alarms.create("reintento", { periodInMinutes: 1 }); }
 alarmas();
 ext.alarms.onAlarm.addListener((a) => {
-  if (a.name === "latido") enviar({ v: 2, kind: "ping", clicked_at: new Date().toISOString() });
-  if (a.name === "reintento") vaciar();
+  syncOn().then((on) => { if (!on) return;   // sin sync: cero tráfico de fondo
+    if (a.name === "latido") enviar({ v: 2, kind: "ping", clicked_at: new Date().toISOString() });
+    if (a.name === "reintento") ext.storage.local.get({ cola: [] }).then((s) => { if (s.cola.length) vaciar(); }); });
 });
 // Al instalar/actualizar: inyectar en pestañas de X ya abiertas (si no, no detecta nada hasta recargar).
-ext.runtime.onInstalled.addListener(async () => {
+ext.runtime.onInstalled.addListener(async (det) => {
   alarmas();
+  await migrar();
   if (!ext.scripting) return;
   const tabs = await ext.tabs.query({ url: ["https://x.com/*", "https://twitter.com/*", "https://mobile.x.com/*", "https://mobile.twitter.com/*"] });
   for (const t of tabs) {
@@ -130,7 +178,7 @@ if (ext.runtime.onMessageExternal && ext.runtime.onMessageExternal.addListener) 
   (async () => {
     const v = parseCodigo(m.codigo);
     if (v.error) return { ok: false, error: v.error };
-    await ext.storage.local.set({ codigo: String(m.codigo).replace(/\s+/g, "") });
+    await ext.storage.local.set({ codigo: String(m.codigo).replace(/\s+/g, ""), sync: true });   // emparejar = activar sync a propósito
     const r = await enviar({ v: 2, kind: "ping", prueba: true, clicked_at: new Date().toISOString() });
     return { ok: !!r.ok, version: ext.runtime.getManifest().version, error: r.error || null };
   })().then(responder, (e) => responder({ ok: false, error: String(e && e.message || e) }));

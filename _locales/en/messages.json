@@ -4,7 +4,7 @@
     "description": "Extension name"
   },
   "extDescription": {
-    "message": "Send your X likes and bookmarks, with an optional voice or written note, to your EchoLike inbox instantly. End-to-end encrypted.",
+    "message": "Save your X likes and bookmarks, with optional voice or written notes, in your own browser. Optional encrypted sync to your EchoLike inbox.",
     "description": "Extension description (must stay under 132 chars)"
   },
   "connectUrl": {
@@ -194,5 +194,65 @@
   "never": {
     "message": "never",
     "description": "no confirmation yet"
+  },
+  "toastSaved": {
+    "message": "EchoLike ✓ saved in this browser ($1)"
+  },
+  "errSyncOff": {
+    "message": "sync is off: nothing is sent"
+  },
+  "statusLocalOnly": {
+    "message": "✓ Saved in this browser only"
+  },
+  "stateSavedLocal": {
+    "message": "✓ saved here"
+  },
+  "localCount": {
+    "message": "$1 items saved here."
+  },
+  "privacyShort": {
+    "message": "Your likes and notes are saved in this browser only. Nothing is sent anywhere unless you turn on sync."
+  },
+  "yourData": {
+    "message": "Your data: export / import"
+  },
+  "syncLabel": {
+    "message": "Sync to my EchoLike inbox (encrypted, off by default)"
+  },
+  "privacyTitle": {
+    "message": "Where your data lives"
+  },
+  "privacyLong": {
+    "message": "Everything EchoLike records (likes, bookmarks, written and voice notes) is stored in this browser's own extension storage. With sync off, the extension makes no network requests of its own. You can export a copy at any time, and delete it by removing the extension."
+  },
+  "syncTitle": {
+    "message": "Sync (optional)"
+  },
+  "syncLong": {
+    "message": "If you turn sync on, each event is encrypted in this browser (AES-256-GCM) with a key only this browser and your paired inbox hold, then relayed through ntfy.sh to the EchoLike inbox you pair with. The relay only sees unreadable text."
+  },
+  "backupTitle": {
+    "message": "Backup"
+  },
+  "exportJson": {
+    "message": "Export JSON"
+  },
+  "importJson": {
+    "message": "Import JSON"
+  },
+  "exportHint": {
+    "message": "The export contains your items only, never your sync key."
+  },
+  "exported": {
+    "message": "Exported $1 items."
+  },
+  "imported": {
+    "message": "Imported $1 new items (of $2 in the file)."
+  },
+  "errImportFormat": {
+    "message": "not an EchoLike export file"
+  },
+  "privacySyncOn": {
+    "message": "Saved in this browser, and sync is ON: each event is also sent encrypted to your paired EchoLike inbox."
   }
 }

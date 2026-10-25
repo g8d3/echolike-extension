@@ -9,6 +9,7 @@ function stateLabel(estado) {
   if (estado === "enviado") return t("stateSent");
   if (estado === "en cola") return t("stateQueued");
   if (estado === "error") return t("stateError");
+  if (estado === "guardado") return t("stateSavedLocal");
   return String(estado ?? "");
 }
 function applyI18n() {
@@ -53,24 +54,33 @@ async function pintar() {
   const evs = c.eventos || [];
   const nrec = evs.filter((e) => e.estado === "recibido").length;
   const url = t("connectUrl");
+  const sync = (await ext.storage.local.get({ sync: false })).sync;
+  const { datos } = await ext.storage.local.get({ datos: [] });
+  if ($("sync")) $("sync").checked = sync;
+  for (const id of ["probar", "conectar", "pie"]) if ($(id) && $(id).style) $(id).style.display = sync ? "" : "none";
+  const pv = document.querySelector && document.querySelector('[data-i18n="privacyShort"]'); if (pv) pv.textContent = t(sync ? "privacySyncOn" : "privacyShort");
+  if ($("nlocal")) $("nlocal").textContent = t("localCount", [String(datos.length)]);
   let cabeza;
-  if (v && v.error) cabeza = `<span class=warn>${esc(t("notConnected"))}</span> <a href="${esc(url)}" target="_blank">${esc(t("connectOneClick"))}</a>`;
+  if (!sync) cabeza = `<span class=ok>${esc(t("statusLocalOnly"))}</span>`;
+  else if (v && v.error) cabeza = `<span class=warn>${esc(t("notConnected"))}</span> <a href="${esc(url)}" target="_blank">${esc(t("connectOneClick"))}</a>`;
   else if (nrec > 0) cabeza = `<span class=ok>${esc(t("statusConnected"))}</span>`;
   else cabeza = `<span class=warn>${esc(t("statusNoConfirm"))}</span> <a href="${esc(url)}" target="_blank">${esc(t("openPrivateConnect"))}</a>`;
   const u = c.ultimo;
   const box = document.getElementById("parbox");
-  if (box && box.style) box.style.display = ((v && v.error) || nrec === 0) ? "" : "none";
+  if (box && box.style) box.style.display = sync && ((v && v.error) || nrec === 0) ? "" : "none";
   const cd = document.getElementById("codigo");
   if (cd) { const cc = document.getElementById("codigoCorto"); if (cc) cc.textContent = c.codigo ? c.codigo.slice(0, 8) + "…" : ""; cd.onclick = async () => { try { await navigator.clipboard.writeText(c.codigo || ""); const ok2 = document.getElementById("copiado"); if (ok2) ok2.textContent = t("copied"); } catch (e) {} }; }
   const h = c.hoy && c.hoy.d === new Date().toLocaleDateString("en-CA") ? c.hoy : { likes: 0, bookmarks: 0 };
   $("estado").innerHTML = cabeza +
       (u ? `<br>${esc(t("lastLabel"))} ${esc(u.kind)} ${hora(u.at)} — <span class=${u.estado === "error" ? "err" : u.estado === "recibido" ? "rec" : "ok"}>${esc(stateLabel(u.estado))}</span>${u.error ? " · " + esc(u.error) : ""}` : `<br>${esc(t("nothingSentYet"))}`);
-  $("estado").innerHTML += (c.cola.length ? `<br><span class=err>${esc(t("pendingRetry", [String(c.cola.length)]))}</span>` : "") +
-    `<br><small>${esc(t("lastConfirm", [c.ultimo_ack && nrec > 0 ? hora(c.ultimo_ack) : t("never")]))}</small>`;
+  $("estado").innerHTML += (c.cola.length && sync ? `<br><span class=err>${esc(t("pendingRetry", [String(c.cola.length)]))}</span>` : "") +
+    (sync ? `<br><small>${esc(t("lastConfirm", [c.ultimo_ack && nrec > 0 ? hora(c.ultimo_ack) : t("never")]))}</small>` : "");
   $("hoy").textContent = t("todayCounter", [String(h.likes), String(h.bookmarks)]);
   $("ev").innerHTML = c.eventos.map((e) => `<tr><td>${hora(e.at)}</td><td>${esc(e.kind)}</td><td>${e.handle ? "@" + esc(e.handle) : ""}</td>` +
     `<td class=${e.estado === "error" ? "err" : e.estado === "recibido" ? "rec" : "ok"}>${esc(stateLabel(e.estado))}${e.error ? "<br>" + esc(e.error) : ""}</td></tr>`).join("");
 }
+if ($("sync")) $("sync").onchange = async () => { await send({ tipo: "sync", on: $("sync").checked }); pintar(); };
+if ($("datosLink")) $("datosLink").onclick = (e) => { e.preventDefault(); ext.runtime.openOptionsPage(); };
 if ($("mic")) $("mic").onchange = async () => { await ext.storage.local.set({ mic: $("mic").checked }); };
 $("probar").onclick = async () => {
   $("estado").textContent = t("sendingTest"); const r = await send({ tipo: "prueba" }); await pintar();

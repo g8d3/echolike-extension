@@ -1,8 +1,4 @@
-# Extensión EchoLike
-
-Gratis y de código abierto (MIT). Sin tienda: Chrome pide **Modo desarrollador** y puede mostrar el aviso *"Desactivar extensiones en modo desarrollador"*; es normal para cualquier extensión instalada así, no es una alerta de virus. Puedes leer todo el código aquí. Descarga: https://github.com/g8d3/echolike-extension/releases/latest/download/echolike-extension.zip
-
-# EchoLike v2.6 — instalación (Chrome / Edge / Brave)
+# EchoLike v2.7 — instalación (Chrome / Edge / Brave)
 
 1. Descarga `extension_echolike.zip` y descomprímelo en una carpeta que no vayas a borrar.
 2. Abre `chrome://extensions` (en Edge: `edge://extensions`).
@@ -17,7 +13,7 @@ Gratis y de código abierto (MIT). Sin tienda: Chrome pide **Modo desarrollador*
 **Firefox (escritorio, 121+):** `about:debugging#/runtime/this-firefox` → *Cargar complemento temporal* → elige `manifest.json` (se borra al cerrar Firefox; para dejarlo fijo hay que firmarlo en addons.mozilla.org).
 **Android (Quetta, el único con extensiones actualizado tras la muerte de Kiwi):** descarga `echolike.crx` (https://echolike.app/extension_echolike.crx) y ábrelo con Quetta para instalarlo. Al ir como paquete con `update_url`, el botón **Update** de su página de extensiones consulta https://echolike.app/extension_update.json y te instala la versión nueva sin tocar carpetas. Si prefieres el zip, Quetta también lo instala, pero entonces Update solo releerá archivos locales. Si el navegador dice `Package is invalid: CRX_REQUIRED_PROOF_MISSING`, ya no acepta paquetes fuera del Chrome Web Store: instala por zip (pasos 1-4) y actualiza repitiendo esos pasos con el zip nuevo. Otros: **Edge Canary**, **Lemur** o **Firefox Nightly** (colección personalizada). Funciona igual en la versión móvil de x.com en el navegador, no en la app de X.
 
-Privacidad: cada evento va cifrado con AES-GCM a un tópico secreto de ntfy.sh (gratis). ntfy solo ve texto ilegible; sin el código nadie puede leerlo ni falsificarlo.
+Privacidad (2.7+): local primero. Likes, bookmarks y notas se guardan en el almacenamiento de la extensión en este navegador y por defecto no se envía nada. Exporta/importa una copia JSON desde la página de opciones (popup → «Tus datos»). El sync es opcional: actívalo (o vincula desde la página privada) y cada evento va cifrado con AES-256-GCM, por un tópico secreto de ntfy.sh, a tu inbox de EchoLike; ntfy solo ve texto ilegible. Las instalaciones que ya enviaban en 2.6.x conservan el sync activado al actualizar.
 
 ## Actualizar desde una versión anterior
 1. Reemplaza los archivos de la carpeta por los del zip nuevo.
