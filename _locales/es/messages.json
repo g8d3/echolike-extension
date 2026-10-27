@@ -1,258 +1,315 @@
 {
-  "extName": {
-    "message": "EchoLike",
-    "description": "Nombre de la extensión"
-  },
-  "extDescription": {
-    "message": "Guarda tus likes y bookmarks de X, con nota de voz o escrita opcional, en tu propio navegador. Sync cifrado opcional a tu inbox de EchoLike.",
-    "description": "Descripción de la extensión"
-  },
-  "connectUrl": {
-    "message": "https://t.me/nova_radar_99_bot",
-    "description": "URL de la página privada"
-  },
-  "toastSent": {
-    "message": "EchoLike ✓ enviado ($1, $2 ms)",
-    "description": "Aviso tras enviar un evento; $1=tipo, $2=ms"
-  },
-  "toastReceived": {
-    "message": "EchoLike ✓ recibido en tu inbox",
-    "description": "Aviso cuando el servidor confirma"
-  },
-  "noResponseBackground": {
-    "message": "sin respuesta del fondo",
-    "description": "Error cuando el fondo no responde"
-  },
-  "keptInQueue": {
-    "message": "(queda en cola)",
-    "description": "Sufijo cuando el evento queda en cola"
-  },
-  "extUpdatedReload": {
-    "message": "EchoLike: la extensión se actualizó, recarga la página",
-    "description": "Aviso cuando el content script quedó viejo"
-  },
-  "toastNoMic": {
-    "message": "EchoLike 🎙 sin micrófono: $1",
-    "description": "Aviso cuando falla el micrófono; $1=error"
-  },
-  "micTitle": {
-    "message": "EchoLike: nota de voz (clic para grabar / parar)",
-    "description": "Título del botón de micrófono"
-  },
-  "penTitle": {
-    "message": "EchoLike: nota escrita",
-    "description": "Título del botón de lápiz"
-  },
-  "switchToVoice": {
-    "message": "Cambiar a nota de voz",
-    "description": "Título del micrófono dentro de la caja"
-  },
-  "notePlaceholder": {
-    "message": "EchoLike: ¿por qué te gustó? (Enter guarda · Shift+Enter salto · Esc cancela)",
-    "description": "Texto de la caja de nota"
-  },
-  "save": {
-    "message": "Guardar",
-    "description": "Botón guardar de la caja"
-  },
-  "errInvalidCode": {
-    "message": "código inválido: debe ser EL2|servidor|tópico|clave",
-    "description": "Formato de código inválido"
-  },
-  "errInvalidServer": {
-    "message": "servidor inválido",
-    "description": "URL de servidor inválida"
-  },
-  "errInvalidKey": {
-    "message": "clave inválida (no son 32 bytes)",
-    "description": "Longitud de clave inválida"
-  },
-  "errKeyNotBase64": {
-    "message": "clave no es base64",
-    "description": "La clave no es base64"
-  },
-  "errNtfy429": {
-    "message": "ntfy 429: en pausa 10 min (limite ntfy.sh, la cola se conserva)",
-    "description": "Límite de ntfy"
-  },
-  "errAck429": {
-    "message": "ack 429: en pausa (limite ntfy.sh)",
-    "description": "Límite al leer acuses"
-  },
-  "errUnauthorizedOrigin": {
-    "message": "origen no autorizado",
-    "description": "Mensaje externo de origen desconocido"
-  },
-  "micLabel": {
-    "message": "Botón 🎙 de nota de voz en cada post",
-    "description": "Etiqueta del micrófono en el popup"
-  },
-  "sendTest": {
-    "message": "Enviar prueba",
-    "description": "Botón de prueba del popup"
-  },
-  "connectBrowser": {
-    "message": "Vincular con el bot",
-    "description": "Botón conectar del popup"
-  },
-  "todayActivity": {
-    "message": "Actividad de hoy",
-    "description": "Encabezado de hoy"
-  },
-  "latestEvents": {
-    "message": "Últimos eventos",
-    "description": "Encabezado de eventos"
-  },
-  "receivedHint": {
-    "message": "(✓ recibido = ya está en tu caja)",
-    "description": "Ayuda junto a Últimos eventos"
-  },
-  "footerTrouble": {
-    "message": "¿Nada llega? Copia tu código de arriba y envía /par + código al $1, luego recarga x.com.",
-    "description": "Ayuda de pie; $1=texto del enlace"
-  },
-  "privatePage": {
-    "message": "bot de Telegram",
-    "description": "Texto del enlace a la página privada"
-  },
-  "notConnected": {
-    "message": "Sin conectar.",
-    "description": "Estado sin código válido"
-  },
-  "connectOneClick": {
-    "message": "Vincúlalo con el bot",
-    "description": "Texto del enlace para conectar"
-  },
-  "statusConnected": {
-    "message": "✓ Conectado — tus likes llegan solos",
-    "description": "Estado conectado"
-  },
-  "statusNoConfirm": {
-    "message": "Sin confirmación del servidor.",
-    "description": "Estado sin confirmación"
-  },
-  "lastLabel": {
-    "message": "Último:",
-    "description": "Etiqueta del último evento"
-  },
-  "nothingSentYet": {
-    "message": "Aún no se ha enviado nada",
-    "description": "Estado vacío"
-  },
-  "pendingRetry": {
-    "message": "$1 pendientes de envío (reintenta solo)",
-    "description": "Cola pendiente; $1=cantidad"
-  },
-  "lastConfirm": {
-    "message": "última confirmación $1",
-    "description": "Hora del último acuse; $1=hora"
-  },
-  "sendingTest": {
-    "message": "Enviando prueba…",
-    "description": "Estado enviando prueba"
-  },
-  "todayCounter": {
-    "message": "likes: $1 · bookmarks: $2",
-    "description": "Contador de hoy; $1=likes $2=bookmarks"
-  },
-  "stateQueued": {
-    "message": "en cola",
-    "description": "Etiqueta del estado en cola"
-  },
-  "stateSent": {
-    "message": "✓ enviado",
-    "description": "Etiqueta del estado enviado"
-  },
-  "stateReceived": {
-    "message": "✓ recibido",
-    "description": "Etiqueta del estado recibido"
-  },
-  "stateError": {
-    "message": "error",
-    "description": "Etiqueta del estado error"
-  },
-  "openPrivateConnect": {
-    "message": "Copia tu código de abajo y envía /par al bot.",
-    "description": "Link text in the popup status when the server has not confirmed yet"
-  },
-  "parCodeTitle": {
-    "message": "Tu código de extensión",
-    "description": "pairing via /par"
-  },
-  "parHint": {
-    "message": "Envía /par seguido de este código al bot. Después no hay nada que memorizar.",
-    "description": "pairing via /par"
-  },
-  "copied": {
-    "message": "Copiado ✓",
-    "description": "pairing via /par"
-  },
-  "copyCode": {
-    "message": "Copiar código",
-    "description": "pairing copy button"
-  },
-  "never": {
-    "message": "nunca",
-    "description": "no confirmation yet"
-  },
-  "toastSaved": {
-    "message": "EchoLike ✓ guardado en este navegador ($1)"
-  },
-  "errSyncOff": {
-    "message": "sync apagado: no se envía nada"
-  },
-  "statusLocalOnly": {
-    "message": "✓ Guardado solo en este navegador"
-  },
-  "stateSavedLocal": {
-    "message": "✓ guardado aquí"
-  },
-  "localCount": {
-    "message": "$1 elementos guardados aquí."
-  },
-  "privacyShort": {
-    "message": "Tus likes y notas se guardan solo en este navegador. No se envía nada a ningún lado salvo que actives sync."
-  },
-  "yourData": {
-    "message": "Tus datos: exportar / importar"
-  },
-  "syncLabel": {
-    "message": "Sincronizar con mi inbox de EchoLike (cifrado, apagado por defecto)"
-  },
-  "privacyTitle": {
-    "message": "Dónde viven tus datos"
-  },
-  "privacyLong": {
-    "message": "Todo lo que EchoLike registra (likes, bookmarks, notas escritas y de voz) se guarda en el almacenamiento propio de la extensión en este navegador. Con sync apagado, la extensión no hace ninguna petición de red propia. Puedes exportar una copia cuando quieras y borrarla desinstalando la extensión."
-  },
-  "syncTitle": {
-    "message": "Sincronización (opcional)"
-  },
-  "syncLong": {
-    "message": "Si activas sync, cada evento se cifra en este navegador (AES-256-GCM) con una clave que solo tienen este navegador y tu inbox vinculado, y viaja por ntfy.sh hasta el inbox de EchoLike que vincules. El relé solo ve texto ilegible."
-  },
-  "backupTitle": {
-    "message": "Copia de seguridad"
-  },
-  "exportJson": {
-    "message": "Exportar JSON"
-  },
-  "importJson": {
-    "message": "Importar JSON"
-  },
-  "exportHint": {
-    "message": "La exportación contiene solo tus elementos, nunca tu clave de sync."
-  },
-  "exported": {
-    "message": "Exportados $1 elementos."
-  },
-  "imported": {
-    "message": "Importados $1 elementos nuevos (de $2 en el archivo)."
-  },
-  "errImportFormat": {
-    "message": "no es un archivo de exportación de EchoLike"
-  },
-  "privacySyncOn": {
-    "message": "Guardado en este navegador, y sync está ACTIVADO: cada evento también se envía cifrado a tu inbox de EchoLike vinculado."
-  }
+ "extName": {
+  "message": "EchoLike",
+  "description": "Nombre de la extensión"
+ },
+ "extDescription": {
+  "message": "Guarda tus likes y bookmarks de X, con nota de voz o escrita opcional, en tu propio navegador. Sync cifrado opcional a tu inbox de EchoLike.",
+  "description": "Descripción de la extensión"
+ },
+ "connectUrl": {
+  "message": "https://t.me/nova_radar_99_bot",
+  "description": "URL de la página privada"
+ },
+ "toastSent": {
+  "message": "EchoLike ✓ enviado ($1, $2 ms)",
+  "description": "Aviso tras enviar un evento; $1=tipo, $2=ms"
+ },
+ "toastReceived": {
+  "message": "EchoLike ✓ recibido en tu inbox",
+  "description": "Aviso cuando el servidor confirma"
+ },
+ "noResponseBackground": {
+  "message": "sin respuesta del fondo",
+  "description": "Error cuando el fondo no responde"
+ },
+ "keptInQueue": {
+  "message": "(queda en cola)",
+  "description": "Sufijo cuando el evento queda en cola"
+ },
+ "extUpdatedReload": {
+  "message": "EchoLike: la extensión se actualizó, recarga la página",
+  "description": "Aviso cuando el content script quedó viejo"
+ },
+ "toastNoMic": {
+  "message": "EchoLike 🎙 sin micrófono: $1",
+  "description": "Aviso cuando falla el micrófono; $1=error"
+ },
+ "micTitle": {
+  "message": "EchoLike: nota de voz (clic para grabar / parar)",
+  "description": "Título del botón de micrófono"
+ },
+ "penTitle": {
+  "message": "EchoLike: nota escrita",
+  "description": "Título del botón de lápiz"
+ },
+ "switchToVoice": {
+  "message": "Cambiar a nota de voz",
+  "description": "Título del micrófono dentro de la caja"
+ },
+ "notePlaceholder": {
+  "message": "EchoLike: ¿por qué te gustó? (Enter guarda · Shift+Enter salto · Esc cancela)",
+  "description": "Texto de la caja de nota"
+ },
+ "save": {
+  "message": "Guardar",
+  "description": "Botón guardar de la caja"
+ },
+ "errInvalidCode": {
+  "message": "código inválido: debe ser EL2|servidor|tópico|clave",
+  "description": "Formato de código inválido"
+ },
+ "errInvalidServer": {
+  "message": "servidor inválido",
+  "description": "URL de servidor inválida"
+ },
+ "errInvalidKey": {
+  "message": "clave inválida (no son 32 bytes)",
+  "description": "Longitud de clave inválida"
+ },
+ "errKeyNotBase64": {
+  "message": "clave no es base64",
+  "description": "La clave no es base64"
+ },
+ "errNtfy429": {
+  "message": "ntfy 429: en pausa 10 min (limite ntfy.sh, la cola se conserva)",
+  "description": "Límite de ntfy"
+ },
+ "errAck429": {
+  "message": "ack 429: en pausa (limite ntfy.sh)",
+  "description": "Límite al leer acuses"
+ },
+ "errUnauthorizedOrigin": {
+  "message": "origen no autorizado",
+  "description": "Mensaje externo de origen desconocido"
+ },
+ "micLabel": {
+  "message": "Botón 🎙 de nota de voz en cada post",
+  "description": "Etiqueta del micrófono en el popup"
+ },
+ "sendTest": {
+  "message": "Enviar prueba",
+  "description": "Botón de prueba del popup"
+ },
+ "connectBrowser": {
+  "message": "Vincular con el bot",
+  "description": "Botón conectar del popup"
+ },
+ "todayActivity": {
+  "message": "Actividad de hoy",
+  "description": "Encabezado de hoy"
+ },
+ "latestEvents": {
+  "message": "Últimos eventos",
+  "description": "Encabezado de eventos"
+ },
+ "receivedHint": {
+  "message": "(✓ recibido = ya está en tu caja)",
+  "description": "Ayuda junto a Últimos eventos"
+ },
+ "footerTrouble": {
+  "message": "¿Nada llega? Copia tu código de arriba y envía /par + código al $1, luego recarga x.com.",
+  "description": "Ayuda de pie; $1=texto del enlace"
+ },
+ "privatePage": {
+  "message": "bot de Telegram",
+  "description": "Texto del enlace a la página privada"
+ },
+ "notConnected": {
+  "message": "Sin conectar.",
+  "description": "Estado sin código válido"
+ },
+ "connectOneClick": {
+  "message": "Vincúlalo con el bot",
+  "description": "Texto del enlace para conectar"
+ },
+ "statusConnected": {
+  "message": "✓ Conectado — tus likes llegan solos",
+  "description": "Estado conectado"
+ },
+ "statusNoConfirm": {
+  "message": "Sin confirmación del servidor.",
+  "description": "Estado sin confirmación"
+ },
+ "lastLabel": {
+  "message": "Último:",
+  "description": "Etiqueta del último evento"
+ },
+ "nothingSentYet": {
+  "message": "Aún no se ha enviado nada",
+  "description": "Estado vacío"
+ },
+ "pendingRetry": {
+  "message": "$1 pendientes de envío (reintenta solo)",
+  "description": "Cola pendiente; $1=cantidad"
+ },
+ "lastConfirm": {
+  "message": "última confirmación $1",
+  "description": "Hora del último acuse; $1=hora"
+ },
+ "sendingTest": {
+  "message": "Enviando prueba…",
+  "description": "Estado enviando prueba"
+ },
+ "todayCounter": {
+  "message": "likes: $1 · bookmarks: $2",
+  "description": "Contador de hoy; $1=likes $2=bookmarks"
+ },
+ "stateQueued": {
+  "message": "en cola",
+  "description": "Etiqueta del estado en cola"
+ },
+ "stateSent": {
+  "message": "✓ enviado",
+  "description": "Etiqueta del estado enviado"
+ },
+ "stateReceived": {
+  "message": "✓ recibido",
+  "description": "Etiqueta del estado recibido"
+ },
+ "stateError": {
+  "message": "error",
+  "description": "Etiqueta del estado error"
+ },
+ "openPrivateConnect": {
+  "message": "Copia tu código de abajo y envía /par al bot.",
+  "description": "Link text in the popup status when the server has not confirmed yet"
+ },
+ "parCodeTitle": {
+  "message": "Tu código de extensión",
+  "description": "pairing via /par"
+ },
+ "parHint": {
+  "message": "Envía /par seguido de este código al bot. Después no hay nada que memorizar.",
+  "description": "pairing via /par"
+ },
+ "copied": {
+  "message": "Copiado ✓",
+  "description": "pairing via /par"
+ },
+ "copyCode": {
+  "message": "Copiar código",
+  "description": "pairing copy button"
+ },
+ "never": {
+  "message": "nunca",
+  "description": "no confirmation yet"
+ },
+ "toastSaved": {
+  "message": "EchoLike ✓ guardado en este navegador ($1)"
+ },
+ "errSyncOff": {
+  "message": "sync apagado: no se envía nada"
+ },
+ "statusLocalOnly": {
+  "message": "✓ Guardado solo en este navegador"
+ },
+ "stateSavedLocal": {
+  "message": "✓ guardado aquí"
+ },
+ "localCount": {
+  "message": "$1 elementos guardados aquí."
+ },
+ "privacyShort": {
+  "message": "Tus likes y notas se guardan solo en este navegador. No se envía nada a ningún lado salvo que actives sync."
+ },
+ "yourData": {
+  "message": "Tus datos: exportar / importar"
+ },
+ "syncLabel": {
+  "message": "Sincronizar con mi inbox de EchoLike (cifrado, apagado por defecto)"
+ },
+ "privacyTitle": {
+  "message": "Dónde viven tus datos"
+ },
+ "privacyLong": {
+  "message": "Todo lo que EchoLike registra (likes, bookmarks, notas escritas y de voz) se guarda en el almacenamiento propio de la extensión en este navegador. Con sync apagado, la extensión no hace ninguna petición de red propia. Puedes exportar una copia cuando quieras y borrarla desinstalando la extensión."
+ },
+ "syncTitle": {
+  "message": "Sincronización (opcional)"
+ },
+ "syncLong": {
+  "message": "Si activas sync, cada evento se cifra en este navegador (AES-256-GCM) con una clave que solo tienen este navegador y tu inbox vinculado, y viaja por ntfy.sh hasta el inbox de EchoLike que vincules. El relé solo ve texto ilegible."
+ },
+ "backupTitle": {
+  "message": "Copia de seguridad"
+ },
+ "exportJson": {
+  "message": "Exportar JSON"
+ },
+ "importJson": {
+  "message": "Importar JSON"
+ },
+ "exportHint": {
+  "message": "La exportación contiene solo tus elementos, nunca tu clave de sync."
+ },
+ "exported": {
+  "message": "Exportados $1 elementos."
+ },
+ "imported": {
+  "message": "Importados $1 elementos nuevos (de $2 en el archivo)."
+ },
+ "errImportFormat": {
+  "message": "no es un archivo de exportación de EchoLike"
+ },
+ "privacySyncOn": {
+  "message": "Guardado en este navegador, y sync está ACTIVADO: cada evento también se envía cifrado a tu inbox de EchoLike vinculado."
+ },
+ "transportTitle": {
+  "message": "Conexión al inbox"
+ },
+ "transportLong": {
+  "message": "Directo envía cada evento a tu propio inbox (confirmación instantánea, sin códigos). Legacy usa el pipe ntfy + bot de Telegram. Both envía por los dos (sin duplicados)."
+ },
+ "transportLabel": {
+  "message": "Modo"
+ },
+ "transportDirect": {
+  "message": "Directo"
+ },
+ "transportBoth": {
+  "message": "Directo + legacy"
+ },
+ "transportLegacy": {
+  "message": "Legacy (ntfy)"
+ },
+ "inboxUrlLabel": {
+  "message": "URL del inbox"
+ },
+ "deviceTokenLabel": {
+  "message": "Token del dispositivo"
+ },
+ "saveLabel": {
+  "message": "Guardar"
+ },
+ "saved": {
+  "message": "Guardado."
+ },
+ "tokenSaved": {
+  "message": "Guardado — deja en blanco para conservarlo."
+ },
+ "testConnection": {
+  "message": "Probar conexión"
+ },
+ "connectionOk": {
+  "message": "Conectado — el inbox respondió."
+ },
+ "errNoToken": {
+  "message": "Falta el token — abre Inbox settings y pégalo."
+ },
+ "errBadToken": {
+  "message": "El inbox rechazó el token (401). Revísalo."
+ },
+ "errBadInboxUrl": {
+  "message": "La URL del inbox debe empezar con https://"
+ },
+ "directTitle": {
+  "message": "Inbox directo"
+ },
+ "directActive": {
+  "message": "Inbox directo activo — confirmación instantánea."
+ },
+ "openInboxSettings": {
+  "message": "Ajustes del inbox"
+ }
 }

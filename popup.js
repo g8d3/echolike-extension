@@ -47,7 +47,8 @@ function applyI18n() {
 }
 applyI18n();
 async function pintar() {
-  const c = await ext.storage.local.get({ codigo: "", mic: true, eventos: [], ultimo: null, cola: [], ultimo_ack: null, hoy: null });
+  const c = await ext.storage.local.get({ codigo: "", mic: true, eventos: [], ultimo: null, cola: [], ultimo_ack: null, hoy: null, transport: "direct", inbox_url: "", device_token: "" });
+  const mode = c.transport || "direct";
   $("ver").textContent = ext.runtime.getManifest().version;
   if ($("mic")) $("mic").checked = c.mic;
   const v = await send({ tipo: "validar", codigo: c.codigo });
@@ -61,13 +62,23 @@ async function pintar() {
   const pv = document.querySelector && document.querySelector('[data-i18n="privacyShort"]'); if (pv) pv.textContent = t(sync ? "privacySyncOn" : "privacyShort");
   if ($("nlocal")) $("nlocal").textContent = t("localCount", [String(datos.length)]);
   let cabeza;
+  const directReady = !!(c.inbox_url && c.device_token);
   if (!sync) cabeza = `<span class=ok>${esc(t("statusLocalOnly"))}</span>`;
+  else if (mode !== "legacy" && !directReady) cabeza = `<span class=warn>${esc(t("errNoToken"))}</span> <a href="options.html" target="_blank">${esc(t("openInboxSettings"))}</a>`;
+  else if (mode !== "legacy" && nrec > 0) cabeza = `<span class=ok>${esc(t("statusConnected"))}</span> <small>(${esc(t("transportDirect"))})</small>`;
+  else if (mode !== "legacy") cabeza = `<span class=ok>${esc(t("directActive"))}</span>`;
   else if (v && v.error) cabeza = `<span class=warn>${esc(t("notConnected"))}</span> <a href="${esc(url)}" target="_blank">${esc(t("connectOneClick"))}</a>`;
   else if (nrec > 0) cabeza = `<span class=ok>${esc(t("statusConnected"))}</span>`;
   else cabeza = `<span class=warn>${esc(t("statusNoConfirm"))}</span> <a href="${esc(url)}" target="_blank">${esc(t("openPrivateConnect"))}</a>`;
   const u = c.ultimo;
   const box = document.getElementById("parbox");
-  if (box && box.style) box.style.display = sync && ((v && v.error) || nrec === 0) ? "" : "none";
+  if (box && box.style) box.style.display = sync && mode === "legacy" && ((v && v.error) || nrec === 0) ? "" : "none";
+  const dbox = document.getElementById("directbox");
+  if (dbox && dbox.style) {
+    dbox.style.display = sync && mode !== "legacy" ? "" : "none";
+    const di = document.getElementById("directInfo");
+    if (di) di.textContent = (mode === "both" ? t("transportBoth") : t("transportDirect")) + " · " + String(c.inbox_url || "").replace(/^https:\/\//, "").slice(0, 40);
+  }
   const cd = document.getElementById("codigo");
   if (cd) { const cc = document.getElementById("codigoCorto"); if (cc) cc.textContent = c.codigo ? c.codigo.slice(0, 8) + "…" : ""; cd.onclick = async () => { try { await navigator.clipboard.writeText(c.codigo || ""); const ok2 = document.getElementById("copiado"); if (ok2) ok2.textContent = t("copied"); } catch (e) {} }; }
   const h = c.hoy && c.hoy.d === new Date().toLocaleDateString("en-CA") ? c.hoy : { likes: 0, bookmarks: 0 };

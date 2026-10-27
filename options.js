@@ -6,9 +6,30 @@ const aviso = (txt, ok) => { $("msg").textContent = txt; $("msg").className = ok
 document.querySelectorAll("[data-i18n]").forEach((el) => { const m = t(el.getAttribute("data-i18n")); if (m && m !== el.getAttribute("data-i18n")) el.textContent = m; });
 async function pintar() {
   $("ver").textContent = ext.runtime.getManifest().version;
-  const s = await ext.storage.local.get({ sync: false, datos: [] });
+  const s = await ext.storage.local.get({ sync: false, datos: [], transport: "direct", inbox_url: "", device_token: "" });
   $("sync").checked = !!s.sync; $("nlocal").textContent = t("localCount", [String(s.datos.length)]);
+  if ($("transport")) $("transport").value = s.transport || "direct";
+  if ($("inbox_url") && !$("inbox_url").value) $("inbox_url").value = s.inbox_url || "";
+  if ($("device_token") && !$("device_token").value && s.device_token) $("device_token").placeholder = t("tokenSaved");
 }
+if ($("guardarInbox")) $("guardarInbox").onclick = async () => {
+  const cur = await ext.storage.local.get({ inbox_url: "", device_token: "", transport: "direct" });
+  const patch = {
+    transport: $("transport").value,
+    inbox_url: $("inbox_url").value.trim() || cur.inbox_url,
+    device_token: $("device_token").value.trim() || cur.device_token,
+  };
+  const r = await send({ tipo: "directConfig", inbox_url: patch.inbox_url, device_token: patch.device_token });
+  if (!r || !r.ok) { $("msgInbox").textContent = (r && r.error) || t("stateError"); $("msgInbox").className = "err"; return; }
+  await ext.storage.local.set(patch);
+  $("msgInbox").textContent = t("saved"); $("msgInbox").className = "ok"; $("device_token").value = "";
+};
+if ($("probarInbox")) $("probarInbox").onclick = async () => {
+  $("msgInbox").textContent = t("sendingTest");
+  const r = await send({ tipo: "prueba" });
+  $("msgInbox").textContent = (r && r.ok) ? t("connectionOk") : ((r && r.error) || t("stateError"));
+  $("msgInbox").className = (r && r.ok) ? "ok" : "err";
+};
 $("sync").onchange = async () => { await send({ tipo: "sync", on: $("sync").checked }); pintar(); };
 $("exportar").onclick = async () => {
   const r = await send({ tipo: "exportar" }); if (!r || !r.ok) return aviso(t("stateError"), false);

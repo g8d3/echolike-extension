@@ -16,6 +16,35 @@ function parseCodigo(raw) {
   return { servidor, topic, clave };
 }
 async function syncOn() { await migrar(); return !!(await ext.storage.local.get({ sync: false })).sync; }
+const INBOX_DEFAULT = "https://echolike-inbox.pastasjuan.workers.dev";
+async function transporte() {
+  await migrar();
+  const s = await ext.storage.local.get({ transport: "direct", inbox_url: INBOX_DEFAULT, device_token: "" });
+  return s.transport || "direct";
+}
+async function cfgDirect() {
+  const s = await ext.storage.local.get({ inbox_url: INBOX_DEFAULT, device_token: "" });
+  const url = (s.inbox_url || "").replace(/\/$/, "");
+  if (!/^https:\/\/[^/]+$/.test(url) && !/^https:\/\/[^/]+\/[^\s]*$/.test(url)) return { error: t("errBadInboxUrl") };
+  if (!s.device_token) return { error: t("errNoToken") };
+  return { inbox_url: url, device_token: s.device_token };
+}
+async function pingDirecto(c) {
+  const r = await fetch(`${c.inbox_url}/api/health`, { headers: { authorization: `Bearer ${c.device_token}` } });
+  if (!r.ok) throw new Error("inbox HTTP " + r.status);
+  return { ok: true };
+}
+async function publicarDirecto(items, c) { // batch POST; confirmation arrives in the same response
+  const r = await fetch(`${c.inbox_url}/api/likes`, {
+    method: "POST", headers: { authorization: `Bearer ${c.device_token}`, "content-type": "application/json" },
+    body: JSON.stringify({ items }),
+  });
+  if (r.status === 401) throw new Error(t("errBadToken"));
+  if (r.status === 429) throw new Error("inbox HTTP 429");
+  if (!r.ok) throw new Error("inbox HTTP " + r.status + " " + (await r.text()).slice(0, 120));
+  const out = await r.json();
+  return new Set((out.received || []).map((x) => x.id + "|" + x.kind));
+}
 async function cfg() {
   let c = await ext.storage.local.get({ codigo: "", sync: false });
   if (!c.codigo && !c.sync) return { error: t("errSyncOff") };   // sin sync no se crean credenciales ni se habla con ningún servidor
@@ -65,21 +94,47 @@ async function publicar(item, c) {
 // Cola en storage: sobrevive a que Chrome duerma el service worker.
 async function encolar(item) { const s = await ext.storage.local.get({ cola: [] }); s.cola.push(item); await ext.storage.local.set({ cola: s.cola }); }
 let vaciando = null;
+async function vaciarLegacy(cola) { // ntfy path, unchanged from 2.7
+  const c = await cfg(); const { ntfy429hasta } = await ext.storage.local.get({ ntfy429hasta: 0 }); let res = { ok: true };
+  if (Date.now() < (ntfy429hasta || 0)) return { ok: false, error: t("errNtfy429") };
+  if (c.error) { for (const it of cola) await anotar(it, "error", c.error); return { ok: false, error: c.error }; }
+  while (cola.length) {
+    const it = cola[0];
+    try { await publicar(it, c); await anotar(it, "enviado"); cola.shift(); await ext.storage.local.set({ ntfy429hasta: 0, ntfy429msg: "" }); }
+    catch (e) { const msg = String(e.message || e); it.intentos = (it.intentos || 0) + 1; await anotar(it, "error", msg); res = { ok: false, error: msg };
+      if (/ntfy HTTP 429/.test(msg)) await ext.storage.local.set({ ntfy429hasta: Date.now() + 10 * 60 * 1000, ntfy429msg: msg.slice(0, 160) });
+      if (it.intentos >= 30) cola.shift();   // reintenta por alarma cada minuto, hasta 30 veces
+      break; }
+  }
+  return res;
+}
+async function vaciarDirecto(cola) { // Worker path: one batch POST, received in the same response
+  const c = await cfgDirect();
+  if (c.error) { for (const it of cola) await anotar(it, "error", c.error); return { ok: false, error: c.error }; }
+  try {
+    const ok = await publicarDirecto(cola, c);
+    for (const it of [...cola]) {
+      if (ok.has(it.id + "|" + it.kind)) { await anotar(it, "recibido"); cola.shift(); }
+      else { await anotar(it, "error", "inbox skipped item"); it.intentos = (it.intentos || 0) + 1; if (it.intentos >= 30) cola.shift(); break; }
+    }
+    return { ok: true };
+  } catch (e) {
+    const msg = String(e.message || e);
+    for (const it of cola) { it.intentos = (it.intentos || 0) + 1; await anotar(it, "error", msg); }
+    while (cola.length && (cola[0].intentos || 0) >= 30) cola.shift();
+    return { ok: false, error: msg, fallback: /inbox HTTP (429|5\d\d)/.test(msg) || /Failed to fetch|NetworkError/.test(msg) };
+  }
+}
 async function vaciar() {
   if (vaciando) return vaciando;
   vaciando = (async () => {
-    const c = await cfg(); const { cola, ntfy429hasta } = await ext.storage.local.get({ cola: [], ntfy429hasta: 0 }); let res = { ok: true };
-    if (Date.now() < (ntfy429hasta || 0)) return { ok: false, error: t("errNtfy429") };
-    if (c.error) { for (const it of cola) await anotar(it, "error", c.error); return { ok: false, error: c.error }; }
-    while (cola.length) {
-      const it = cola[0];
-      try { await publicar(it, c); await anotar(it, "enviado"); cola.shift(); await ext.storage.local.set({ ntfy429hasta: 0, ntfy429msg: "" }); }
-      catch (e) { const msg = String(e.message || e); it.intentos = (it.intentos || 0) + 1; await anotar(it, "error", msg); res = { ok: false, error: msg };
-        if (/ntfy HTTP 429/.test(msg)) await ext.storage.local.set({ ntfy429hasta: Date.now() + 10 * 60 * 1000, ntfy429msg: msg.slice(0, 160) });
-        if (it.intentos >= 30) cola.shift();   // reintenta por alarma cada minuto, hasta 30 veces
-        break; }
-    }
-    await ext.storage.local.set({ cola }); return res;
+    const mode = await transporte();
+    const { cola } = await ext.storage.local.get({ cola: [] });
+    if (!cola.length) return { ok: true };
+    if (mode === "legacy") { const r = await vaciarLegacy(cola); await ext.storage.local.set({ cola }); return r; }
+    const r = await vaciarDirecto(cola);
+    if (!r.ok && r.fallback && mode === "both") { const r2 = await vaciarLegacy(cola); await ext.storage.local.set({ cola }); return r2; }
+    await ext.storage.local.set({ cola }); return r;
   })();
   try { return await vaciando; } finally { vaciando = null; }
 }
@@ -111,11 +166,17 @@ async function enviar(item) {
   item.uid = item.uid || crypto.randomUUID();
   if (item.kind !== "ping") await guardarLocal(item);
   if (!(await syncOn())) { if (item.kind === "ping") return { ok: false, uid: item.uid, error: t("errSyncOff") }; await anotar(item, "guardado"); return { ok: true, uid: item.uid, local: true }; }
+  const mode = await transporte();
+  if (item.kind === "ping" && mode !== "legacy") { // direct ping = inbox health check, never queued
+    try { const c = await cfgDirect(); if (c.error) return { ok: false, uid: item.uid, error: c.error }; await pingDirecto(c); await anotar(item, "recibido"); return { ok: true, uid: item.uid, direct: true }; }
+    catch (e) { const msg = String(e.message || e); await anotar(item, "error", msg); return { ok: false, uid: item.uid, error: msg }; }
+  }
   await anotar(item, "en cola"); await encolar(item);
   const r = await vaciar(); return Object.assign({ uid: item.uid }, r);
 }
 async function acuses() {
   if (!(await syncOn())) return { ok: true, uids: [], nuevos: 0, local: true };
+  if ((await transporte()) === "direct") return { ok: true, uids: [], nuevos: 0, direct: true }; // confirmations already inline
   const c = await cfg(); if (c.error) return { ok: false, error: c.error };
   const r = await fetch(`${c.servidor}/${c.topic}_ack/json?poll=1&since=6h`);
   if (r.status === 429) return { ok: false, error: t("errAck429") };
@@ -136,7 +197,9 @@ ext.runtime.onMessage.addListener((m, _s, responder) => {
     : m && m.tipo === "validar" ? Promise.resolve(parseCodigo(m.codigo))
     : m && m.tipo === "exportar" ? exportar()
     : m && m.tipo === "importar" ? importar(m.data)
-    : m && m.tipo === "sync" ? ext.storage.local.set({ sync: !!m.on }).then(() => m.on ? cfg() : null).then(() => ({ ok: true, sync: !!m.on })) : null;
+    : m && m.tipo === "sync" ? (async () => { await ext.storage.local.set({ sync: !!m.on }); if (m.on && (await transporte()) !== "direct") await cfg(); return { ok: true, sync: !!m.on }; })()
+    : m && m.tipo === "transport" ? ext.storage.local.set({ transport: m.mode }).then(() => ({ ok: true, transport: m.mode }))
+    : m && m.tipo === "directConfig" ? (async () => { const cur = await ext.storage.local.get({ inbox_url: "", device_token: "" }); const patch = {}; if (m.inbox_url) patch.inbox_url = String(m.inbox_url); if (m.device_token) patch.device_token = String(m.device_token); await ext.storage.local.set(patch); return { ok: true }; })() : null;
   if (!p) return;
   p.then(responder, (e) => responder({ ok: false, error: String(e && e.message || e) })); return true;
 });
@@ -148,7 +211,7 @@ function migrar() {
     const st = await ext.storage.local.get(["sync", "codigo", "eventos"]);
     if (st.sync !== undefined) return;
     const yaEnviaba = !!st.codigo && (st.eventos || []).some((e) => e.estado === "recibido" || (e.estado === "enviado" && e.kind !== "ping"));
-    await ext.storage.local.set({ sync: yaEnviaba });
+    await ext.storage.local.set(Object.assign({ sync: yaEnviaba }, st.transport === undefined ? { transport: yaEnviaba ? "legacy" : "direct" } : null));
   })();
 }
 migrar();
@@ -176,6 +239,11 @@ if (ext.runtime.onMessageExternal && ext.runtime.onMessageExternal.addListener) 
   const ok_origen = remitente && remitente.url === "https://echolike.app/private/" || remitente && remitente.url === "https://echolike.app/es/private/";
   if (!ok_origen || !m || m.tipo !== "emparejar") { responder({ ok: false, error: t("errUnauthorizedOrigin") }); return true; }
   (async () => {
+    if (m.modo === "direct" || (m.inbox_url && m.device_token)) { // emparejar-direct desde la página privada
+      await ext.storage.local.set({ inbox_url: String(m.inbox_url || INBOX_DEFAULT), device_token: String(m.device_token || ""), transport: "direct", sync: true });
+      const r = await enviar({ v: 2, kind: "ping", prueba: true, clicked_at: new Date().toISOString() });
+      return { ok: !!r.ok, version: ext.runtime.getManifest().version, error: r.error || null };
+    }
     const v = parseCodigo(m.codigo);
     if (v.error) return { ok: false, error: v.error };
     await ext.storage.local.set({ codigo: String(m.codigo).replace(/\s+/g, ""), sync: true });   // emparejar = activar sync a propósito
@@ -184,4 +252,4 @@ if (ext.runtime.onMessageExternal && ext.runtime.onMessageExternal.addListener) 
   })().then(responder, (e) => responder({ ok: false, error: String(e && e.message || e) }));
   return true;
 });
-if (typeof module !== "undefined") module.exports = { parseCodigo };
+if (typeof module !== "undefined") module.exports = { parseCodigo, INBOX_DEFAULT };
