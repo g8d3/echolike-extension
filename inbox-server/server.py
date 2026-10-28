@@ -72,23 +72,24 @@ class DB:
         return True
 
     def store(self, device, items):
-        n = 0
+        got = []
         for it in items:
             if not isinstance(it, dict):
                 continue
             iid = str(it.get("id") or secrets.token_hex(12))
+            kind = str(it.get("kind", ""))
             try:
                 self.c.execute(
                     "INSERT OR IGNORE INTO likes (id, device, kind, handle, url, text, nota, clicked_at, recv_at, raw) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                    (iid, device, str(it.get("kind", "")), str(it.get("handle", "") or ""), str(it.get("url", "") or ""),
+                    (iid, device, kind, str(it.get("handle", "") or ""), str(it.get("url", "") or ""),
                      str(it.get("text", "") or "")[:4000], str(it.get("nota", "") or "")[:4000],
                      str(it.get("clicked_at", "") or ""), utcnow(), json.dumps(it)[:8000]),
                 )
-                n += self.c.total_changes and 1 or 0
+                got.append({"id": iid, "kind": kind})
             except sqlite3.Error:
                 pass
         self.c.commit()
-        return n
+        return got
 
     def latest(self, limit=50):
         rows = self.c.execute("SELECT id, kind, handle, url, text, nota, clicked_at, recv_at FROM likes ORDER BY recv_at DESC LIMIT ?", (limit,)).fetchall()
