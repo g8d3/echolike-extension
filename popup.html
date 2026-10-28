@@ -2,18 +2,22 @@
 <style>body{font:13px system-ui;width:360px;margin:12px}button{font:inherit;padding:6px;box-sizing:border-box;margin:3px 0}button{width:49%}
 #estado{margin:6px 0;padding:8px;border-radius:8px;background:#f2f2f2}.ok{color:#00875a}.err{color:#d0021b}.rec{color:#1d9bf0;font-weight:600}.warn{color:#b26a00}
 table{width:100%;border-collapse:collapse;font-size:12px}td{border-top:1px solid #eee;padding:3px 2px;vertical-align:top}small{color:#666}
-a.btn{display:inline-block;text-align:center;width:98%;padding:6px;background:#1d9bf0;color:#fff;border-radius:6px;text-decoration:none;margin:3px 0}</style>
+a.btn{display:inline-block;text-align:center;width:98%;padding:6px;background:#1d9bf0;color:#fff;border-radius:6px;text-decoration:none;margin:3px 0}
+details{margin-top:8px;border-top:1px solid #eee;padding-top:6px}summary{cursor:pointer;color:#555;font-weight:600}</style>
 <h3 style="margin:0 0 6px">EchoLike v<span id=ver>2.7</span></h3>
-<div id="privacidad" style="margin:0 0 6px;padding:8px;border-radius:8px;background:#eefaf3"><span data-i18n="privacyShort">Your likes and notes are saved in this browser only. Nothing is sent anywhere unless you turn on sync.</span> <small id="nlocal"></small> <a href="options.html" id="datosLink" data-i18n="yourData">Your data: export / import</a></div>
+<div id="privacidad" style="margin:0 0 6px;padding:8px;border-radius:8px;background:#eefaf3"><span data-i18n="privacyShort">Your likes and notes are saved in this browser only. Nothing is sent anywhere unless you turn on sync.</span> <small id="nlocal"></small></div>
 <label><input id="sync" type="checkbox"> <span data-i18n="syncLabel">Sync to my EchoLike inbox (encrypted, off by default)</span></label><br>
 <div id="estado">—</div>
 <div id="parbox" style="display:none;margin:6px 0;padding:8px;border-radius:8px;background:#eef4ff"><b data-i18n="parCodeTitle">Your extension code — click to copy</b><br><button id="codigo" type="button" data-i18n="copyCode" style="margin:4px 0;padding:6px 12px;cursor:pointer">Copy code</button> <small id="codigoCorto" style="color:#666"></small> <span id="copiado"></span><br><small data-i18n="parHint">Send /par followed by this code to the bot.</small></div>
-<div id="directbox" style="display:none;margin:6px 0;padding:8px;border-radius:8px;background:#eefaf3"><b data-i18n="directTitle">Direct inbox</b><br><small id="directInfo"></small> <a href="options.html" id="inboxLink" data-i18n="openInboxSettings">Inbox settings</a></div>
+<div id="directbox" style="display:none;margin:6px 0;padding:8px;border-radius:8px;background:#eefaf3"><b data-i18n="directTitle">Direct inbox</b><br><small id="directInfo"></small> <a href="options.html" id="inboxLink" data-i18n="openInboxSettings">Inbox settings</a><br><small data-i18n="pairHint">Pair once with the bot below to get your device token — that is what lets your likes reach your inbox.</small></div>
+<a class="btn connectLink" href="https://t.me/nova_radar_99_bot" target="_blank" id="conectar" data-i18n="connectBrowser">Connect this browser</a>
+<details><summary data-i18n="advLabel">Advanced</summary>
 <label><input id="mic" type="checkbox"> <span data-i18n="micLabel">Voice note 🎙 button on every post</span></label><br>
 <button id="probar" data-i18n="sendTest">Send test</button>
-<a class="btn connectLink" href="https://echolike.app/private/" target="_blank" id="conectar" data-i18n="connectBrowser">Connect this browser</a>
+<a href="options.html" id="datosLink" data-i18n="yourData">Your data: export / import</a>
 <div style="margin-top:6px"><b data-i18n="todayActivity">Today's activity</b><div id="hoy">—</div></div>
 <b data-i18n="latestEvents">Latest events</b> <small data-i18n="receivedHint">(✓ received = already in your inbox)</small>
 <table id="ev"></table>
-<small id="pie" data-i18n="footerTrouble">Nothing arriving? Open the <a class="connectLink" href="https://echolike.app/private/" target="_blank">private page</a>, press Connect and reload x.com.</small>
+<small id="pie" data-i18n="footerTrouble">Nothing arriving? Open the <a class="connectLink" href="https://t.me/nova_radar_99_bot" target="_blank">private page</a>, press Connect and reload x.com.</small>
+</details>
 <script src="popup.js"></script>

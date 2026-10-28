@@ -7,7 +7,7 @@
 set -euo pipefail
 VER="${1:?usage: build-flavors.sh VERSION}"
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
-INBOX_HOSTS="https://echolike-inbox.pastasjuan.workers.dev/* https://likes.echolike.app/*"
+INBOX_HOSTS="https://echolike-inbox.pastasjuan.workers.dev/*"
 SRC=(manifest.json background.js content.js content.css popup.html popup.js options.html options.js icons _locales)
 
 rm -rf "$DIR/build"; mkdir -p "$DIR/build"

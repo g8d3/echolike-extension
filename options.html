@@ -8,7 +8,7 @@
 <label><input id="sync" type="checkbox"> <span data-i18n="syncLabel">Sync to my EchoLike inbox (encrypted, off by default)</span></label></div>
 <div class="box"><b data-i18n="transportTitle">Inbox connection</b><p data-i18n="transportLong">Direct posts each event to your own inbox (instant confirmation, no codes). Legacy uses the ntfy + Telegram-bot pipe. Both sends through both (deduped server-side).</p>
 <label><span data-i18n="transportLabel">Mode</span> <select id="transport"><option value="direct" data-i18n="transportDirect">Direct (recommended)</option><option value="both" data-i18n="transportBoth">Both</option><option value="legacy" data-i18n="transportLegacy">Legacy (ntfy)</option></select></label><br><br>
-<label><span data-i18n="inboxUrlLabel">Inbox URL</span><br><input id="inbox_url" type="url" style="width:100%;padding:8px" placeholder="https://echolike-inbox.pastasjuan.workers.dev"></label><br><br>
+<label><span data-i18n="inboxUrlLabel">Inbox URL</span><br><input id="inbox_url" type="url" style="width:100%;padding:8px" placeholder="https://your-inbox.workers.dev"></label><br><br>
 <label><span data-i18n="deviceTokenLabel">Device token</span><br><input id="device_token" type="password" style="width:100%;padding:8px" autocomplete="off"></label><br><br>
 <button id="guardarInbox" type="button" data-i18n="saveLabel">Save</button> <button id="probarInbox" type="button" data-i18n="testConnection">Test connection</button>
 <div id="msgInbox"></div></div>
