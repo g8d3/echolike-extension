@@ -319,5 +319,17 @@
   "pairHint": {
     "message": "Pair once with the bot below to get your device token — that is what lets your likes reach your inbox.",
     "description": "one-line pairing explanation in popup"
+  },
+  "presetLocal": {
+    "message": "Use this computer",
+    "description": "one-tap preset filling the local server URL"
+  },
+  "presetHint": {
+    "message": "Run python3 server.py on your computer, then Save. From your phone use this computer's IP (Tailscale/LAN), not 127.0.0.1.",
+    "description": "how the local server URL works"
+  },
+  "permDenied": {
+    "message": "Permission denied — direct sync waits until you allow it.",
+    "description": "optional host permission was denied"
   }
 }

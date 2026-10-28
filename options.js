@@ -12,6 +12,7 @@ async function pintar() {
   if ($("inbox_url") && !$("inbox_url").value) $("inbox_url").value = s.inbox_url || "";
   if ($("device_token") && !$("device_token").value && s.device_token) $("device_token").placeholder = t("tokenSaved");
 }
+if ($("presetLocal")) $("presetLocal").onclick = () => { if ($("inbox_url")) $("inbox_url").value = "http://127.0.0.1:8911"; };
 if ($("guardarInbox")) $("guardarInbox").onclick = async () => {
   const cur = await ext.storage.local.get({ inbox_url: "", device_token: "", transport: "direct" });
   const patch = {
@@ -19,6 +20,14 @@ if ($("guardarInbox")) $("guardarInbox").onclick = async () => {
     inbox_url: $("inbox_url").value.trim() || cur.inbox_url,
     device_token: $("device_token").value.trim() || cur.device_token,
   };
+  if (patch.inbox_url && ext.permissions && ext.permissions.request) {
+    let origin = "";
+    try { origin = new URL(patch.inbox_url).origin + "/*"; } catch (e) {}
+    if (origin) {
+      const granted = await new Promise((ok) => { try { ext.permissions.request({ origins: [origin] }, ok); } catch (e) { ok(false); } });
+      if (!granted) { $("msgInbox").textContent = t("permDenied"); $("msgInbox").className = "err"; return; }
+    }
+  }
   const r = await send({ tipo: "directConfig", inbox_url: patch.inbox_url, device_token: patch.device_token });
   if (!r || !r.ok) { $("msgInbox").textContent = (r && r.error) || t("stateError"); $("msgInbox").className = "err"; return; }
   await ext.storage.local.set(patch);

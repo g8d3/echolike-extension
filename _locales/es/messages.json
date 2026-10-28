@@ -319,5 +319,17 @@
   "pairHint": {
     "message": "Vincula una vez con el bot de abajo para obtener tu token — es lo que deja que tus likes lleguen a tu inbox.",
     "description": "explicación de vinculación en una línea"
+  },
+  "presetLocal": {
+    "message": "Usar este aparato",
+    "description": "preset que rellena la URL del servidor local"
+  },
+  "presetHint": {
+    "message": "Corre python3 server.py en tu computadora y guarda. Desde el teléfono usa la IP de tu computadora (Tailscale/LAN), no 127.0.0.1.",
+    "description": "cómo funciona la URL del servidor local"
+  },
+  "permDenied": {
+    "message": "Permiso denegado — el envío directo espera hasta que lo permitas.",
+    "description": "permiso opcional de host denegado"
   }
 }

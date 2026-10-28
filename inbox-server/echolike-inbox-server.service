@@ -1,0 +1,14 @@
+[Unit]
+Description=EchoLike inbox server (tu pc:.likes via HTTPS directa)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/vuos/code/p4/echolike-extension/inbox-server
+ExecStart=/usr/bin/python3 server.py --host 0.0.0.0 --port 8911
+Restart=always
+RestartSec=30
+Nice=10
+
+[Install]
+WantedBy=default.target
