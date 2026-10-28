@@ -25,6 +25,7 @@ async function transporte() {
 async function cfgDirect() {
   const s = await ext.storage.local.get({ inbox_url: INBOX_DEFAULT, device_token: "" });
   const url = (s.inbox_url || "").replace(/\/$/, "");
+  try { const u = new URL(url); if (u.port === "8904") return { error: t("errIsVault") }; } catch (e) {}
   if (!/^https?:\/\/[^/]+$/.test(url) && !/^https?:\/\/[^/]+\/[^\s]*$/.test(url)) return { error: t("errBadInboxUrl") };
   if (!s.device_token) return { error: t("errNoToken") };
   return { inbox_url: url, device_token: s.device_token };

@@ -339,5 +339,17 @@
   "ownServerSteps": {
     "message": "1. Descarga server.py. 2. Corre: python3 server.py. 3. Pega abajo la URL y el token que imprime, y guarda.",
     "description": "3 pasos inbox propio"
+  },
+  "errIsVault": {
+    "message": "Esa es la caja de secretos (:8904), no el inbox. Usa el puerto 8911 con http, no https.",
+    "description": "apuntó el inbox a la caja"
+  },
+  "errHttpsIp": {
+    "message": "https a una IP casi nunca funciona — los servidores caseros usan http://. Cambia https:// por http://.",
+    "description": "https a IP falla"
+  },
+  "errCantReach": {
+    "message": "No responde. Revisa: http (no https), puerto 8911, server.py corriendo, mismo VPN/wifi que el servidor. Abre la URL en el navegador: si /api/health carga, es el permiso de la extensión — guarda de nuevo y permite.",
+    "description": "test de conexión sin red"
   }
 }

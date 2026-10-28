@@ -339,5 +339,17 @@
   "ownServerSteps": {
     "message": "1. Download server.py. 2. Run: python3 server.py. 3. Paste the URL and token it prints below, then Save.",
     "description": "own server 3 steps"
+  },
+  "errIsVault": {
+    "message": "That is the secrets vault (:8904), not the inbox. Use port 8911 with http, not https.",
+    "description": "user pointed the inbox at the vault"
+  },
+  "errHttpsIp": {
+    "message": "https to a bare IP almost never works — home servers use http://. Change https:// to http://.",
+    "description": "https to IP will fail"
+  },
+  "errCantReach": {
+    "message": "No answer. Check: http (not https), port 8911, server.py running, same VPN/wifi as the server. Open the URL in the browser: if /api/health loads, it is the extension permission — Save again and Allow.",
+    "description": "test connection network failure"
   }
 }

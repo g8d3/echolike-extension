@@ -20,6 +20,11 @@ if ($("guardarInbox")) $("guardarInbox").onclick = async () => {
     inbox_url: $("inbox_url").value.trim() || cur.inbox_url,
     device_token: $("device_token").value.trim() || cur.device_token,
   };
+  try {
+    const u = new URL(patch.inbox_url);
+    if (u.port === "8904") { $("msgInbox").textContent = t("errIsVault"); $("msgInbox").className = "err"; return; }
+    if (u.protocol === "https:" && /^(\d+\.\d+\.\d+\.\d+|localhost|\[.*\])$/.test(u.hostname)) { $("msgInbox").textContent = t("errHttpsIp"); $("msgInbox").className = "err"; return; }
+  } catch (e) { if (patch.inbox_url) { $("msgInbox").textContent = t("errBadInboxUrl"); $("msgInbox").className = "err"; return; } }
   if (patch.inbox_url && ext.permissions && ext.permissions.request) {
     let origin = "";
     try { origin = new URL(patch.inbox_url).origin + "/*"; } catch (e) {}
@@ -36,7 +41,10 @@ if ($("guardarInbox")) $("guardarInbox").onclick = async () => {
 if ($("probarInbox")) $("probarInbox").onclick = async () => {
   $("msgInbox").textContent = t("sendingTest");
   const r = await send({ tipo: "prueba" });
-  $("msgInbox").textContent = (r && r.ok) ? t("connectionOk") : ((r && r.error) || t("stateError"));
+  let msg = (r && r.ok) ? t("connectionOk") : ((r && r.error) || t("stateError"));
+  if (r && !r.ok && /Failed to fetch|NetworkError/.test(String(r.error || ""))) msg = t("errCantReach");
+  if (r && !r.ok && String(r.error || "").includes("401")) msg = t("errBadToken");
+  $("msgInbox").textContent = msg;
   $("msgInbox").className = (r && r.ok) ? "ok" : "err";
 };
 $("sync").onchange = async () => { await send({ tipo: "sync", on: $("sync").checked }); pintar(); };
