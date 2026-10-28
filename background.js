@@ -16,7 +16,7 @@ function parseCodigo(raw) {
   return { servidor, topic, clave };
 }
 async function syncOn() { await migrar(); return !!(await ext.storage.local.get({ sync: false })).sync; }
-const INBOX_DEFAULT = "https://echolike-inbox.pastasjuan.workers.dev";
+const INBOX_DEFAULT = "";
 async function transporte() {
   await migrar();
   const s = await ext.storage.local.get({ transport: "direct", inbox_url: INBOX_DEFAULT, device_token: "" });
@@ -25,7 +25,7 @@ async function transporte() {
 async function cfgDirect() {
   const s = await ext.storage.local.get({ inbox_url: INBOX_DEFAULT, device_token: "" });
   const url = (s.inbox_url || "").replace(/\/$/, "");
-  if (!/^https:\/\/[^/]+$/.test(url) && !/^https:\/\/[^/]+\/[^\s]*$/.test(url)) return { error: t("errBadInboxUrl") };
+  if (!/^https?:\/\/[^/]+$/.test(url) && !/^https?:\/\/[^/]+\/[^\s]*$/.test(url)) return { error: t("errBadInboxUrl") };
   if (!s.device_token) return { error: t("errNoToken") };
   return { inbox_url: url, device_token: s.device_token };
 }

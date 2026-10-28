@@ -317,8 +317,8 @@
     "description": "collapsed section with secondary settings"
   },
   "pairHint": {
-    "message": "Pair once with the bot below to get your device token — that is what lets your likes reach your inbox.",
-    "description": "one-line pairing explanation in popup"
+    "message": "Your device token is printed by YOUR inbox — server.py shows it on first start. The bot below is only for the legacy pipe.",
+    "description": "token comes from the user's own server"
   },
   "presetLocal": {
     "message": "Use this computer",
@@ -331,5 +331,13 @@
   "permDenied": {
     "message": "Permission denied — direct sync waits until you allow it.",
     "description": "optional host permission was denied"
+  },
+  "ownServerTitle": {
+    "message": "No inbox yet? Run your own in 1 minute:",
+    "description": "own server howto title"
+  },
+  "ownServerSteps": {
+    "message": "1. Download server.py. 2. Run: python3 server.py. 3. Paste the URL and token it prints below, then Save.",
+    "description": "own server 3 steps"
   }
 }

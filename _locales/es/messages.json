@@ -317,8 +317,8 @@
     "description": "sección colapsada con ajustes secundarios"
   },
   "pairHint": {
-    "message": "Vincula una vez con el bot de abajo para obtener tu token — es lo que deja que tus likes lleguen a tu inbox.",
-    "description": "explicación de vinculación en una línea"
+    "message": "Tu token lo muestra TU inbox — server.py lo imprime al arrancar. El bot de abajo es solo para la vía vieja (legacy).",
+    "description": "el token sale del servidor propio"
   },
   "presetLocal": {
     "message": "Usar este aparato",
@@ -331,5 +331,13 @@
   "permDenied": {
     "message": "Permiso denegado — el envío directo espera hasta que lo permitas.",
     "description": "permiso opcional de host denegado"
+  },
+  "ownServerTitle": {
+    "message": "¿Sin inbox? Corre el tuyo en 1 minuto:",
+    "description": "título cómo tener inbox propio"
+  },
+  "ownServerSteps": {
+    "message": "1. Descarga server.py. 2. Corre: python3 server.py. 3. Pega abajo la URL y el token que imprime, y guarda.",
+    "description": "3 pasos inbox propio"
   }
 }
