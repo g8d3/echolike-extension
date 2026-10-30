@@ -15,6 +15,7 @@ Tailscale, o http://192.168.x.x:8911 en tu wifi). Nada sale a internet.
 """
 import argparse
 import hashlib
+import subprocess
 import json
 import os
 import secrets
@@ -27,6 +28,10 @@ from urllib.parse import urlparse, parse_qs
 
 DAILY_CAP = 2000
 MAX_DEVICES = int(os.environ.get("ECHO_MAX_DEVICES", "10"))
+# The producer knows when a row is durable, so it tells the analysis pipeline instead of
+# a file watcher guessing: the kernel event can arrive before sqlite commits.
+INGEST_CMD = os.environ.get("ECHO_INGEST_CMD",
+                            os.path.expanduser("~/code/p4/e092-echolike/operador/inbox_a_pipeline.py"))
 OPEN_CLAIM = os.environ.get("ECHO_OPEN_CLAIM") == "1"
 CLAIM_PER_IP_HOUR = int(os.environ.get("ECHO_CLAIM_PER_HOUR", "3"))
 
@@ -124,6 +129,17 @@ class DB:
         self.c.commit()
         return True
 
+    def notify_pipeline(self):
+        """Fire-and-forget: the ingest script is idempotent, so a double call is harmless."""
+        if not INGEST_CMD or not os.path.exists(INGEST_CMD):
+            return
+        try:
+            subprocess.Popen(["/usr/bin/python3", INGEST_CMD, "--quiet"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+        except OSError:
+            pass
+
     def store(self, device, items, ua="", ip=""):
         got = []
         for it in items:
@@ -143,6 +159,8 @@ class DB:
             except sqlite3.Error:
                 pass
         self.c.commit()
+        if got:
+            self.notify_pipeline()
         return got
 
     def latest(self, limit=50):
