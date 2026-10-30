@@ -211,7 +211,7 @@
     "message": "$1 items saved here."
   },
   "privacyShort": {
-    "message": "Your likes and notes are saved in this browser only. Nothing is sent anywhere unless you turn on sync."
+    "message": "Everything EchoLike records stays in this browser until you connect an inbox. You can export a copy at any time."
   },
   "yourData": {
     "message": "Your data: export / import"
@@ -351,5 +351,50 @@
   "errCantReach": {
     "message": "No answer. Check: http (not https), port 8911, server.py running, same VPN/wifi as the server. Open the URL in the browser: if /api/health loads, it is the extension permission — Save again and Allow.",
     "description": "test connection network failure"
+  },
+  "simpleSub": {
+    "message": "Paste the address of your inbox and press Connect — the rest is automatic."
+  },
+  "connectLabel": {
+    "message": "Connect"
+  },
+  "connecting": {
+    "message": "Connecting…"
+  },
+  "connectedTo": {
+    "message": "Connected to $1"
+  },
+  "localCountLabel": {
+    "message": "Saved on this browser:"
+  },
+  "noInboxHint": {
+    "message": "no inbox yet? run server.py on your computer, then paste its address here."
+  },
+  "advancedTitle": {
+    "message": "Advanced"
+  },
+  "tokenTitle": {
+    "message": "Device token (only if your server gave you one)"
+  },
+  "tokenHint": {
+    "message": "Servers that accept claims give you a token automatically. Paste one here only for a hosted inbox that handed it to you."
+  },
+  "transportLongShort": {
+    "message": "Direct posts to your inbox. Legacy is the old ntfy pipe. Both sends through both."
+  },
+  "errClaimClosed": {
+    "message": "This server does not accept automatic claims: paste its token in Advanced."
+  },
+  "errDeviceLimit": {
+    "message": "This server already has all the devices it accepts."
+  },
+  "errTooManyClaims": {
+    "message": "Too many attempts from this network. Try again in an hour."
+  },
+  "errClaim": {
+    "message": "The server did not give a token."
+  },
+  "errOldServer": {
+    "message": "That inbox is an older version: update it or use a newer server."
   }
 }

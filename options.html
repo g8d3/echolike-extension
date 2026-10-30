@@ -1,20 +1,55 @@
-<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>EchoLike — your data</title>
-<style>body{font:15px system-ui;max-width:640px;margin:16px auto;padding:0 12px;line-height:1.45}button,label.btn{font:inherit;padding:10px 14px;margin:4px 0;border-radius:8px;border:1px solid #ccc;background:#fff;cursor:pointer;display:inline-block}
-.box{padding:12px;border-radius:10px;background:#f4f6f8;margin:12px 0}.ok{color:#00875a}.err{color:#d0021b}small{color:#555}</style>
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>EchoLike</title>
+<style>
+body{font:15px system-ui;max-width:560px;margin:16px auto;padding:0 12px;line-height:1.45;color:#111}
+h2{font-size:1.15rem;margin:0 0 4px}h2 small{color:#666;font-weight:400}
+.sub{color:#555;margin:0 0 14px}
+button,label.btn{font:inherit;padding:11px 16px;border-radius:10px;border:1px solid #ccc;background:#fff;cursor:pointer}
+button.primary{background:#111;color:#fff;border-color:#111;font-weight:600}
+input{font:inherit;padding:11px 12px;border-radius:10px;border:1px solid #ccc;width:100%}
+.row{display:flex;gap:8px;align-items:center;margin:10px 0}
+.row input{flex:1}
+.ok{color:#00875a}.err{color:#d0021b}.mut{color:#666;font-size:.9rem}
+#msgInbox{margin:8px 0;min-height:1.2em}
+details{margin-top:18px;border-top:1px solid #e5e7eb;padding-top:10px}
+summary{cursor:pointer;color:#555;font-weight:600}
+details .box{margin:10px 0}
+</style>
 <h2>EchoLike <small>v<span id="ver"></span></small></h2>
-<div class="box"><b data-i18n="privacyTitle">Where your data lives</b><p data-i18n="privacyLong">Everything EchoLike records (likes, bookmarks, written and voice notes) is stored in this browser's own extension storage. With sync off, the extension makes no network requests of its own. You can export a copy at any time, and delete it by removing the extension.</p>
-<p id="nlocal"></p></div>
-<div class="box"><b data-i18n="syncTitle">Sync (optional)</b><p data-i18n="syncLong">If you turn sync on, each event is encrypted in this browser (AES-256-GCM) with a key only this browser and your paired inbox hold, then relayed through ntfy.sh to the EchoLike inbox you pair with. The relay only sees unreadable text.</p>
-<label><input id="sync" type="checkbox"> <span data-i18n="syncLabel">Sync to my EchoLike inbox (encrypted, off by default)</span></label></div>
-<div class="box"><b data-i18n="transportTitle">Inbox connection</b><p data-i18n="transportLong">Direct posts each event to your own inbox (instant confirmation, no codes). Legacy uses the ntfy + Telegram-bot pipe. Both sends through both (deduped server-side).</p><p><b data-i18n="ownServerTitle">No inbox yet? Run your own in 1 minute:</b><br><span data-i18n="ownServerSteps">1. Download server.py. 2. Run: python3 server.py. 3. Paste the URL and token it prints below, then Save.</span><br><a href="https://echolike.app/server.py">server.py</a></p>
-<label><span data-i18n="transportLabel">Mode</span> <select id="transport"><option value="direct" data-i18n="transportDirect">Direct (recommended)</option><option value="both" data-i18n="transportBoth">Both</option><option value="legacy" data-i18n="transportLegacy">Legacy (ntfy)</option></select></label><br><br>
-<label><span data-i18n="inboxUrlLabel">Inbox URL</span><br><input id="inbox_url" type="url" style="width:100%;padding:8px" placeholder="https://your-inbox.workers.dev"></label>
-<div style="margin:8px 0"><button id="presetLocal" type="button" data-i18n="presetLocal">Use this computer</button><br><small data-i18n="presetHint">Run python3 server.py on your computer, then Save. From your phone use this computer's IP (Tailscale/LAN), not 127.0.0.1.</small></div><br><br>
-<label><span data-i18n="deviceTokenLabel">Device token</span><br><input id="device_token" type="password" style="width:100%;padding:8px" autocomplete="off"></label><br><br>
-<button id="guardarInbox" type="button" data-i18n="saveLabel">Save</button> <button id="probarInbox" type="button" data-i18n="testConnection">Test connection</button>
-<div id="msgInbox"></div></div>
-<div class="box"><b data-i18n="backupTitle">Backup</b><br>
-<button id="exportar" type="button" data-i18n="exportJson">Export JSON</button>
-<label class="btn"><span data-i18n="importJson">Import JSON</span><input id="importar" type="file" accept="application/json,.json" style="display:none"></label>
-<div id="msg"></div><small data-i18n="exportHint">The export contains your items only, never your sync key.</small></div>
+<p class="sub" data-i18n="simpleSub">One field. Paste the address of your inbox and press Connect — the rest is automatic.</p>
+
+<div class="row">
+  <input id="inbox_url" type="url" autocomplete="off" spellcheck="false" placeholder="https://inbox.example or http://192.168.0.93:8911">
+</div>
+<div class="row"><button id="conectar" class="primary" type="button" data-i18n="connectLabel">Connect</button></div>
+<div id="msgInbox"></div>
+<p class="mut"><span data-i18n="localCountLabel">Saved on this browser:</span> <span id="nlocal">0</span> · <span data-i18n="noInboxHint">no inbox yet? run server.py on your computer, then paste its address here.</span></p>
+
+<details>
+<summary data-i18n="advancedTitle">Advanced</summary>
+
+<div class="box"><b data-i18n="tokenTitle">Device token (only if your server gave you one)</b>
+<p class="mut" data-i18n="tokenHint">Servers that accept claims give you a token automatically. Paste one here only for a hosted inbox that handed it to you.</p>
+<input id="device_token" type="password" autocomplete="off" style="width:100%">
+<div class="row"><button id="guardarInbox" type="button" data-i18n="saveLabel">Save</button>
+<button id="probarInbox" type="button" data-i18n="testConnection">Test connection</button></div></div>
+
+<div class="box"><b data-i18n="transportTitle">Mode</b>
+<p class="mut" data-i18n="transportLongShort">Direct posts to your inbox. Legacy is the old ntfy pipe. Both sends through both.</p>
+<select id="transport" style="padding:9px;border-radius:9px;border:1px solid #ccc">
+<option value="direct" data-i18n="transportDirect">Direct (recommended)</option>
+<option value="both" data-i18n="transportBoth">Both</option>
+<option value="legacy" data-i18n="transportLegacy">Legacy (ntfy)</option></select></div>
+
+<div class="box"><label><input id="sync" type="checkbox"> <span data-i18n="syncLabel">Sync to my EchoLike inbox (encrypted, off by default)</span></label>
+<p class="mut" data-i18n="privacyShort">Everything EchoLike records stays in this browser until you connect an inbox. You can export a copy at any time.</p></div>
+
+<div class="box"><b data-i18n="backupTitle">Backup</b>
+<div class="row"><button id="exportar" type="button" data-i18n="exportJson">Export JSON</button>
+<label class="btn"><span data-i18n="importJson">Import JSON</span><input id="importar" type="file" accept="application/json,.json" style="display:none"></label></div>
+<div id="msg"></div><p class="mut" data-i18n="exportHint">The export contains your items only, never your sync key.</p></div>
+
+<div class="box"><b data-i18n="ownServerTitle">Run your own inbox</b>
+<p class="mut" data-i18n="ownServerSteps">Download server.py, run python3 server.py, and paste the address it prints above. Nothing leaves your network.</p>
+<a href="https://echolike.app/server.py">server.py</a></div>
+</details>
 <script src="options.js"></script>

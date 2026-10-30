@@ -211,7 +211,7 @@
     "message": "$1 elementos guardados aquí."
   },
   "privacyShort": {
-    "message": "Tus likes y notas se guardan solo en este navegador. No se envía nada a ningún lado salvo que actives sync."
+    "message": "Todo lo que EchoLike registra queda en este navegador hasta que conectes un inbox. Puedes exportar una copia cuando quieras."
   },
   "yourData": {
     "message": "Tus datos: exportar / importar"
@@ -351,5 +351,50 @@
   "errCantReach": {
     "message": "No responde. Revisa: http (no https), puerto 8911, server.py corriendo, mismo VPN/wifi que el servidor. Abre la URL en el navegador: si /api/health carga, es el permiso de la extensión — guarda de nuevo y permite.",
     "description": "test de conexión sin red"
+  },
+  "simpleSub": {
+    "message": "Pega la dirección de tu inbox y pulsa Conectar: el resto es automático."
+  },
+  "connectLabel": {
+    "message": "Conectar"
+  },
+  "connecting": {
+    "message": "Conectando…"
+  },
+  "connectedTo": {
+    "message": "Conectado a $1"
+  },
+  "localCountLabel": {
+    "message": "Guardado en este navegador:"
+  },
+  "noInboxHint": {
+    "message": "¿sin inbox todavía? corre server.py en tu computador y pega su dirección acá."
+  },
+  "advancedTitle": {
+    "message": "Avanzado"
+  },
+  "tokenTitle": {
+    "message": "Token del dispositivo (solo si tu servidor te dio uno)"
+  },
+  "tokenHint": {
+    "message": "Los servidores que aceptan reclamos te dan el token solos. Pégalo acá solo si un inbox alojado te lo entregó."
+  },
+  "transportLongShort": {
+    "message": "Directo publica en tu inbox. Legacy es el tubo viejo de ntfy. Ambos envía por los dos."
+  },
+  "errClaimClosed": {
+    "message": "Este servidor no acepta reclamos automáticos: pega su token en Avanzado."
+  },
+  "errDeviceLimit": {
+    "message": "Este servidor ya tiene todos los dispositivos que acepta."
+  },
+  "errTooManyClaims": {
+    "message": "Demasiados intentos desde esta red. Inténtalo en una hora."
+  },
+  "errClaim": {
+    "message": "El servidor no entregó un token."
+  },
+  "errOldServer": {
+    "message": "Ese inbox es una versión vieja: actualízalo o usa un servidor más nuevo."
   }
 }
