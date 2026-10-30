@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "__MSG_extName__",
-  "version": "2.8.0",
+  "version": "2.8.5",
   "default_locale": "en",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAoWO2b54p8C7RoY1bVQO+mVKZ+xoy+GnmcQ9YmClVIV7OtxDWy3DNYHR0j66haX59U2xU/3K19PsZ/wbynI5xOAz1mI+58xnvvEkUg0m/vyc9ob4uVQA1W0+s3Opw1faB483WMjqUmTemP7qH5ZJdbl0hS4+VTb2ebuT5KmCJMDe43vjK2wKMUTZ8NRzDovIqVRHVQuJBPuzr9/K92FDk1z+pMPI8A0nMVUuRVadH/kdJiH3w8BkgX5mAVyG2S2DOM6Jkbmc6baoJ5r8eugS3n9SbC0eTmVrOsksNPQVYbLHwmt5Z+q8U5ct+D9wHDfrm8evMbJlSjobwLmYyyEqZbQIDAQAB",
   "update_url": "https://echolike.app/extension_update.json",
