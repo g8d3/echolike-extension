@@ -42,6 +42,11 @@ class DB:
         self.c = sqlite3.connect(path, check_same_thread=False)
         self.c.execute("CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0)")
         self.c.execute("CREATE TABLE IF NOT EXISTS likes (id TEXT PRIMARY KEY, device TEXT NOT NULL, kind TEXT, handle TEXT, url TEXT, text TEXT, nota TEXT, clicked_at TEXT, recv_at TEXT, raw TEXT)")
+        # Which phone/PC sent it: without this, two devices with the same token are one blur (added 2026-10-29).
+        cols = {r[1] for r in self.c.execute("PRAGMA table_info(likes)")}
+        for c, t in (("ua", "TEXT"), ("ip", "TEXT")):
+            if c not in cols:
+                self.c.execute(f"ALTER TABLE likes ADD COLUMN {c} {t}")
         self.c.execute("CREATE TABLE IF NOT EXISTS daily (device TEXT NOT NULL, day TEXT NOT NULL, n INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (device, day))")
         self.c.commit()
 
@@ -71,7 +76,7 @@ class DB:
         self.c.commit()
         return True
 
-    def store(self, device, items):
+    def store(self, device, items, ua="", ip=""):
         got = []
         for it in items:
             if not isinstance(it, dict):
@@ -80,10 +85,11 @@ class DB:
             kind = str(it.get("kind", ""))
             try:
                 self.c.execute(
-                    "INSERT OR IGNORE INTO likes (id, device, kind, handle, url, text, nota, clicked_at, recv_at, raw) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT OR IGNORE INTO likes (id, device, kind, handle, url, text, nota, clicked_at, recv_at, raw, ua, ip) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                     (iid, device, kind, str(it.get("handle", "") or ""), str(it.get("url", "") or ""),
                      str(it.get("text", "") or "")[:4000], str(it.get("nota", "") or "")[:4000],
-                     str(it.get("clicked_at", "") or ""), utcnow(), json.dumps(it)[:8000]),
+                     str(it.get("clicked_at", "") or ""), utcnow(), json.dumps(it)[:8000],
+                     str(ua or "")[:300], str(ip or "")[:60]),
                 )
                 got.append({"id": iid, "kind": kind})
             except sqlite3.Error:
@@ -179,7 +185,8 @@ def make_handler(db):
                 return self._json({"ok": False, "error": "items must be a list"}, 400)
             if not db.check_cap(dev, len(items)):
                 return self._json({"ok": False, "error": "daily cap"}, 429)
-            return self._json({"ok": True, "received": db.store(dev, items)})
+            return self._json({"ok": True, "received": db.store(dev, items, self.headers.get("user-agent") or "",
+                                                                self.headers.get("x-forwarded-for") or self.client_address[0])})
 
     return H
 

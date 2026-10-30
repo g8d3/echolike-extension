@@ -36,9 +36,16 @@ async function pingDirecto(c) {
   return { ok: true };
 }
 async function publicarDirecto(items, c) { // batch POST; confirmation arrives in the same response
+  // Latency the server cannot see: from the click to the moment the like leaves this device.
+  // clicked_at and Date.now() are the same clock, so the number is honest even if the clock is off.
+  const t0 = Date.now();
+  const conLat = items.map((it) => {
+    const c0 = Date.parse(it.clicked_at);
+    return Object.assign({}, it, { sent_ms: isNaN(c0) ? null : Math.max(0, t0 - c0), queued: items.length });
+  });
   const r = await fetch(`${c.inbox_url}/api/likes`, {
     method: "POST", headers: { authorization: `Bearer ${c.device_token}`, "content-type": "application/json" },
-    body: JSON.stringify({ items }),
+    body: JSON.stringify({ items: conLat, post_ms: Date.now() - t0 }),
   });
   if (r.status === 401) throw new Error(t("errBadToken"));
   if (r.status === 429) throw new Error("inbox HTTP 429");
