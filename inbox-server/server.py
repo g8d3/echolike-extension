@@ -16,6 +16,7 @@ Tailscale, o http://192.168.x.x:8911 en tu wifi). Nada sale a internet.
 import argparse
 import hashlib
 import subprocess
+import time as _time
 import json
 import os
 import secrets
@@ -208,7 +209,9 @@ def make_handler(db):
         def do_GET(self):
             u = urlparse(self.path)
             if u.path == "/api/health":
-                return self._json({"ok": True, "time": utcnow(), "api": 2,
+                # now_ms lets a client measure its own clock offset against this machine instead of
+                # guessing: the phones' clocks are ~300 ms off and that lands in every latency number.
+                return self._json({"ok": True, "time": utcnow(), "now_ms": int(_time.time() * 1000), "api": 2,
                                    "claim": "open" if OPEN_CLAIM else "private",
                                    "devices": db.device_count()})
             if u.path == "/api/inbox":

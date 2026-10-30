@@ -30,18 +30,46 @@ async function cfgDirect() {
   if (!s.device_token) return { error: t("errNoToken") };
   return { inbox_url: url, device_token: s.device_token };
 }
+// Phone clocks are not in sync with the PC (measured: ~300 ms), and that error lands in every
+// latency the server computes. /api/health returns its own now_ms, so the offset is measured
+// here (three samples, keep the one with the shortest round trip) instead of guessed.
+async function medirDesfase(c) {
+  let best = null;
+  for (let i = 0; i < 3; i += 1) {
+    const t0 = Date.now();
+    try {
+      const r = await fetch(`${c.inbox_url}/api/health`, { cache: "no-store" });
+      const j = await r.json();
+      const t1 = Date.now();
+      if (typeof j.now_ms === "number") {
+        const rtt = t1 - t0;
+        const off = Math.round(j.now_ms + rtt / 2 - t1);
+        if (best === null || rtt < best.rtt) best = { off, rtt };
+      }
+    } catch (e) { /* keep whatever sample we have */ }
+  }
+  if (best !== null) await ext.storage.local.set({ clock_offset_ms: best.off, clock_offset_rtt: best.rtt, clock_offset_at: new Date().toISOString() });
+  return best === null ? null : best.off;
+}
+
 async function pingDirecto(c) {
   const r = await fetch(`${c.inbox_url}/api/health`, { headers: { authorization: `Bearer ${c.device_token}` } });
   if (!r.ok) throw new Error("inbox HTTP " + r.status);
+  medirDesfase(c).catch(() => {});
   return { ok: true };
 }
 async function publicarDirecto(items, c) { // batch POST; confirmation arrives in the same response
   // Latency the server cannot see: from the click to the moment the like leaves this device.
   // clicked_at and Date.now() are the same clock, so the number is honest even if the clock is off.
   const t0 = Date.now();
+  const { clock_offset_ms } = await ext.storage.local.get({ clock_offset_ms: null });
   const conLat = items.map((it) => {
     const c0 = Date.parse(it.clicked_at);
-    return Object.assign({}, it, { sent_ms: isNaN(c0) ? null : Math.max(0, t0 - c0), queued: items.length });
+    return Object.assign({}, it, {
+      sent_ms: isNaN(c0) ? null : Math.max(0, t0 - c0),
+      clock_offset_ms: typeof clock_offset_ms === "number" ? clock_offset_ms : null,
+      queued: items.length,
+    });
   });
   const r = await fetch(`${c.inbox_url}/api/likes`, {
     method: "POST", headers: { authorization: `Bearer ${c.device_token}`, "content-type": "application/json" },
