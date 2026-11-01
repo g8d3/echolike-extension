@@ -122,6 +122,10 @@ class DB:
         # (founder free credits, promo, manual top-ups after a crypto payment
         # is seen on-chain). Bookkeeping only: granting moves no money.
         self.c.execute("CREATE TABLE IF NOT EXISTS grants (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, day TEXT NOT NULL, user_id TEXT NOT NULL, credits INTEGER NOT NULL, reason TEXT NOT NULL DEFAULT '')")
+        # Referral attribution: who brought each user. First touch wins and is
+        # never overwritten (last-touch theft and self-dealing pay nothing).
+        # Set alongside a grant, read by /api/usage for commission payouts.
+        self.c.execute("CREATE TABLE IF NOT EXISTS referrals (user_id TEXT PRIMARY KEY, referred_by TEXT NOT NULL, at TEXT NOT NULL)")
         self.c.commit()
         self._ensure_users()
 
@@ -228,6 +232,7 @@ class DB:
                 "inference": self.get_inference(user_id),
                 "balance": {"granted_total": granted, "spent_total": ctotal,
                               "left_total": granted - ctotal,
+                              "referred_by": self.get_referrer(user_id),
                               "recent_grants": self.get_grant_history(user_id)}}
 
     def bump_pipeline(self, user_id, likes_n):
@@ -271,10 +276,13 @@ class DB:
         return {"today": {"calls": row[0] if row else 0, "seconds": round((row[1] if row else 0) / 1000.0, 2), "chars": row[2] if row else 0},
                 "total": {"calls": t[0], "seconds": round(t[1] / 1000.0, 2), "chars": t[2]}}
 
-    def grant_credits(self, user_id, credits, reason=""):
+    def grant_credits(self, user_id, credits, reason="", referred_by=None):
         """Record gifted credits for a user. Returns the new granted total.
 
-        Raises ValueError on bad input. Never touches enforcement: the quota
+        When referred_by names the agent id that brought this user, the first
+        such name is kept forever (INSERT OR IGNORE): first touch wins, later
+        names are ignored, and naming yourself stores nothing. Raises
+        ValueError on bad input. Never touches enforcement: the quota
         gate reads FREE_DAILY only, so grants are visible but refuse nothing
         until the owner turns enforcement on."""
         if not isinstance(user_id, str) or not user_id:
@@ -284,8 +292,23 @@ class DB:
         reason = str(reason or "")[:200]
         self.c.execute("INSERT INTO grants (at, day, user_id, credits, reason) VALUES (?,?,?,?,?)",
                        (utcnow(), today(), user_id, credits, reason))
+        if isinstance(referred_by, str) and referred_by and referred_by != user_id:
+            self.c.execute("INSERT OR IGNORE INTO referrals (user_id, referred_by, at) VALUES (?,?,?)",
+                           (user_id, referred_by[:120], utcnow()))
         self.c.commit()
         return self.get_grants(user_id)["total"]
+
+    def get_referrer(self, user_id):
+        """The agent id that first brought this user, or None.
+
+        Read-only view over the referrals table; unknown users and users
+        granted without a referrer report None, never an error."""
+        try:
+            row = self.c.execute("SELECT referred_by FROM referrals WHERE user_id=?",
+                                 (user_id,)).fetchone()
+        except sqlite3.Error:
+            return None
+        return row[0] if row else None
 
     def get_grants(self, user_id):
         try:
@@ -492,7 +515,8 @@ def make_handler(db):
                 return self._json({"ok": False, "error": "bad json"}, 400)
             try:
                 total = db.grant_credits(body.get("user_id"), body.get("credits"),
-                                         body.get("reason", ""))
+                                         body.get("reason", ""),
+                                         body.get("referred_by"))
             except ValueError as e:
                 return self._json({"ok": False, "error": str(e)}, 400)
             return self._json({"ok": True, "user_id": body.get("user_id"),
