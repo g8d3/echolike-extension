@@ -28,7 +28,7 @@ import secrets
 import sqlite3
 import stat
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -138,6 +138,11 @@ class DB:
         gcols = {r[1] for r in self.c.execute("PRAGMA table_info(grant_codes)")}
         if "revoked" not in gcols:
             self.c.execute("ALTER TABLE grant_codes ADD COLUMN revoked TEXT NOT NULL DEFAULT ''")
+        # Expiry: mint can stamp a deadline (expires_at, '' = never); redeeming
+        # past it is refused 410, so pre-minted batches stop being bearer money.
+        # Added 2026-11-01; old rows backfill '' and read as None.
+        if "expires_at" not in gcols:
+            self.c.execute("ALTER TABLE grant_codes ADD COLUMN expires_at TEXT NOT NULL DEFAULT ''")
         self.c.commit()
         self._ensure_users()
 
@@ -311,20 +316,31 @@ class DB:
         self.c.commit()
         return self.get_grants(user_id)["total"]
 
-    def mint_code(self, credits, reason=""):
+    def mint_code(self, credits, reason="", expires_days=None):
         """Mint one single-use prepaid code worth credits. Returns the code.
 
         Localhost only (the HTTP layer enforces it): the owner mints after
         seeing a payment off-band and hands the code to the buyer. ValueError
-        on bad input; reason cut at 200 chars, stored for the grant history."""
+        on bad input; reason cut at 200 chars, stored for the grant history.
+        expires_days (None or '' = never expires, else an integer number of
+        days 1..3650) stamps expires_at; redeeming past it raises
+        LookupError("expired")."""
         if isinstance(credits, bool) or not isinstance(credits, int) or credits <= 0:
             raise ValueError("credits must be a positive integer")
         reason = str(reason or "")[:200]
+        if expires_days is None or expires_days == "":
+            expires_at = ""
+        elif isinstance(expires_days, bool) or not isinstance(expires_days, int):
+            raise ValueError("expires_days must be an integer number of days")
+        elif not 1 <= expires_days <= 3650:
+            raise ValueError("expires_days must be between 1 and 3650")
+        else:
+            expires_at = (datetime.now(timezone.utc) + timedelta(days=expires_days)).isoformat()
         for _ in range(10):
             code = "EL-" + secrets.token_hex(4).upper()
             try:
-                self.c.execute("INSERT INTO grant_codes (code, credits, reason, created_at) VALUES (?,?,?,?)",
-                               (code, credits, reason, utcnow()))
+                self.c.execute("INSERT INTO grant_codes (code, credits, reason, created_at, expires_at) VALUES (?,?,?,?,?)",
+                               (code, credits, reason, utcnow(), expires_at))
                 self.c.commit()
                 return code
             except sqlite3.IntegrityError:
@@ -336,7 +352,8 @@ class DB:
 
         Single-use: the first redeemer wins, a second redeem raises
         LookupError("already redeemed"). Unknown codes raise LookupError,
-        blank codes ValueError, revoked codes LookupError("revoked"). The
+        blank codes ValueError, revoked codes LookupError("revoked"),
+        codes past their expires_at LookupError("expired"). The
         grant carries the code's stored reason,
         so the history shows why the credits exist."""
         if not isinstance(user_id, str) or not user_id:
@@ -344,7 +361,7 @@ class DB:
         if not isinstance(code, str) or not code.strip():
             raise ValueError("code must be a non-empty string")
         code = code.strip().upper()
-        row = self.c.execute("SELECT credits, reason, redeemed_by, revoked FROM grant_codes WHERE code=?",
+        row = self.c.execute("SELECT credits, reason, redeemed_by, revoked, expires_at FROM grant_codes WHERE code=?",
                              (code,)).fetchone()
         if not row:
             raise LookupError("unknown code")
@@ -352,6 +369,8 @@ class DB:
             raise LookupError("revoked")
         if row[2]:
             raise LookupError("already redeemed")
+        if row[4] and row[4] <= utcnow():
+            raise LookupError("expired")
         self.c.execute("INSERT INTO grants (at, day, user_id, credits, reason) VALUES (?,?,?,?,?)",
                        (utcnow(), today(), user_id, row[0], row[1]))
         self.c.execute("UPDATE grant_codes SET redeemed_by=?, redeemed_at=? WHERE code=?",
@@ -389,8 +408,9 @@ class DB:
 
         Read-only view over grant_codes for the owner (localhost GET
         /api/codes): [{code, credits, reason, created_at, redeemed_by,
-        redeemed_at, revoked}]. Unredeemed codes report redeemed_by/
-        redeemed_at as None, live codes report revoked as None; never an
+        redeemed_at, revoked, expires_at}]. Unredeemed codes report redeemed_by/
+        redeemed_at as None, live codes report revoked as None, codes minted
+        without a deadline report expires_at as None; never an
         error, unknown state is an empty list. Limit clamped
         to 1..500, default 100."""
         try:
@@ -400,14 +420,15 @@ class DB:
         limit = max(1, min(500, limit))
         try:
             rows = self.c.execute(
-                "SELECT code, credits, reason, created_at, redeemed_by, redeemed_at, revoked "
+                "SELECT code, credits, reason, created_at, redeemed_by, redeemed_at, revoked, expires_at "
                 "FROM grant_codes ORDER BY rowid DESC LIMIT ?",
                 (limit,)).fetchall()
         except sqlite3.Error:
             return []
         return [{"code": r[0], "credits": r[1], "reason": r[2],
                  "created_at": r[3], "redeemed_by": r[4] or None,
-                 "redeemed_at": r[5] or None, "revoked": r[6] or None} for r in rows]
+                 "redeemed_at": r[5] or None, "revoked": r[6] or None,
+                 "expires_at": r[7] or None} for r in rows]
 
     def get_referrer(self, user_id):
         """The agent id that first brought this user, or None.
@@ -690,12 +711,16 @@ def make_handler(db):
             except (ValueError, OSError):
                 return self._json({"ok": False, "error": "bad json"}, 400)
             try:
-                code = db.mint_code(body.get("credits"), body.get("reason", ""))
+                code = db.mint_code(body.get("credits"), body.get("reason", ""),
+                                    body.get("expires_days"))
             except ValueError as e:
                 return self._json({"ok": False, "error": str(e)}, 400)
+            latest = db.list_codes(1)
+            exp = latest[0]["expires_at"] if latest and latest[0]["code"] == code else None
             return self._json({"ok": True, "code": code,
                                "credits": body.get("credits"),
-                               "reason": str(body.get("reason", "") or "")[:200]})
+                               "reason": str(body.get("reason", "") or "")[:200],
+                               "expires_at": exp})
 
         def _redeem(self):
             """POST /api/redeem — authed user redeems a prepaid code once."""
@@ -718,6 +743,8 @@ def make_handler(db):
                 return self._json({"ok": False, "error": str(e)}, 400)
             except LookupError as e:
                 msg = str(e)
+                if msg == "expired":
+                    return self._json({"ok": False, "error": msg}, 410)
                 if "already" in msg or "revoked" in msg:
                     return self._json({"ok": False, "error": msg}, 409)
                 return self._json({"ok": False, "error": msg}, 404)
