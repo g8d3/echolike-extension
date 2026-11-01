@@ -170,6 +170,13 @@ class DB:
             self.c.execute("ALTER TABLE grant_codes ADD COLUMN sale_amount NUMERIC DEFAULT NULL")
             self.c.execute("ALTER TABLE grant_codes ADD COLUMN sale_currency TEXT NOT NULL DEFAULT ''")
             self.c.execute("ALTER TABLE grant_codes ADD COLUMN sale_ref TEXT NOT NULL DEFAULT ''")
+        # Payouts: what the owner actually paid each bringer off-band
+        # (recorded here after the money moves, so the book knows what is
+        # settled). localhost POST /api/payout writes one row per payment;
+        # /api/codes totals read it as paid{} and payable{} (owed - paid).
+        # Bookkeeping only: recording a payout moves no money. New table,
+        # so old books simply show no payouts. Added 2026-11-01.
+        self.c.execute("CREATE TABLE IF NOT EXISTS payouts (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, day TEXT NOT NULL, agent TEXT NOT NULL, amount NUMERIC NOT NULL, currency TEXT NOT NULL, ref TEXT NOT NULL DEFAULT '')")
         self.c.commit()
         self._ensure_users()
 
@@ -484,6 +491,53 @@ class DB:
         self.c.commit()
         return at
 
+    def record_payout(self, agent, amount, currency, ref=""):
+        """Record an off-band payout to a bringer. Returns the timestamp.
+
+        Localhost only (the HTTP layer enforces it): the owner pays the
+        bringer off-band (crypto, after the commission rate decision) and
+        writes down what moved, so totals can show paid{} and payable{}.
+        agent must be a non-empty string (cut at 120, like referrals);
+        amount a positive number (bool rejected); currency a non-empty
+        string (stored upper-cased, cut at 16); ref a string cut at 200.
+        Anything else raises ValueError. Writes no grant and changes no
+        gate: the ledger only remembers."""
+        if not isinstance(agent, str) or not agent.strip():
+            raise ValueError("agent must be a non-empty string")
+        agent = agent.strip()[:120]
+        if isinstance(amount, bool) or not isinstance(amount, (int, float)) or not amount > 0:
+            raise ValueError("amount must be a positive number")
+        if not isinstance(currency, str) or not currency.strip():
+            raise ValueError("currency must be a non-empty string")
+        currency = currency.strip().upper()[:16]
+        if ref is None:
+            ref = ""
+        if not isinstance(ref, str):
+            raise ValueError("ref must be a string")
+        at = utcnow()
+        self.c.execute("INSERT INTO payouts (at, day, agent, amount, currency, ref) VALUES (?,?,?,?,?,?)",
+                       (at, today(), agent, amount, currency, ref[:200]))
+        self.c.commit()
+        return at
+
+    def get_payouts(self):
+        """Paid-out totals per bringer, read-only.
+
+        {agent: {CUR: total}} over the payouts table, rounded to 9 decimals;
+        never an error, unknown state is {}."""
+        try:
+            rows = self.c.execute("SELECT agent, currency, amount FROM payouts").fetchall()
+        except sqlite3.Error:
+            return {}
+        out = {}
+        for agent, currency, amount in rows:
+            if not agent or not currency:
+                continue
+            bucket = out.setdefault(agent, {})
+            bucket[currency] = bucket.get(currency, 0) + float(amount)
+        return {a: {k: round(v, 9) for k, v in sorted(cur.items())}
+                for a, cur in sorted(out.items())}
+
     def list_codes(self, limit=100):
         """Prepaid code inventory, newest first.
 
@@ -521,7 +575,8 @@ class DB:
         """Recorded revenue totals over prepaid codes, read-only.
 
         {codes, redeemed, revoked, outstanding, with_sale, sales:{CUR: total},
-        by_referrer:{agent: {CUR: total}}, commission_pct, owed:{agent: {CUR: amount}}}.
+        by_referrer:{agent: {CUR: total}}, commission_pct, owed:{agent: {CUR: amount}},
+        paid:{agent: {CUR: total}}, payable:{agent: {CUR: amount}}}.
         Sums every row carrying a sale
         (a revoked code keeps its note: the money arrived, the code was
         killed); free/promo rows count in codes but add nothing. by_referrer
@@ -531,14 +586,19 @@ class DB:
         revoked and unstamped rows stay in sales but never in by_referrer.
         owed applies the ECHO_COMMISSION_PCT rate to that settled base
         (report-only: the owner pays off-band); with no rate set
-        commission_pct is None and owed is {}. Totals always cover the
+        commission_pct is None and owed is {}. paid sums the payouts table
+        (localhost POST /api/payout, one row per off-band payment to a
+        bringer); payable is owed minus paid per agent and currency, so the
+        owner sees what is still due — negative when a bringer was overpaid,
+        honest either way. Totals always cover the
         whole book, never just the ?limit= window
         of /api/codes. Sums round to 9 decimals (a lamport) so float dust
         never reaches the owner. No new table, never an error, unknown
         state is all zeros."""
         zero = {"codes": 0, "redeemed": 0, "revoked": 0, "outstanding": 0,
                 "with_sale": 0, "sales": {}, "by_referrer": {},
-                "commission_pct": COMMISSION_PCT, "owed": {}}
+                "commission_pct": COMMISSION_PCT, "owed": {},
+                "paid": {}, "payable": {}}
         try:
             rows = self.c.execute(
                 "SELECT redeemed_by, revoked, sale_amount, sale_currency "
@@ -576,6 +636,26 @@ class DB:
                                  for a, cur in sorted(by_ref.items())}
         zero["owed"] = {a: {k: round(v, 9) for k, v in sorted(cur.items())}
                             for a, cur in sorted(owed_raw.items())}
+        try:
+            prows = self.c.execute(
+                "SELECT agent, currency, amount FROM payouts").fetchall()
+        except sqlite3.Error:
+            prows = []
+        paid_raw = {}
+        for agent, currency, amount in prows:
+            if not agent or not currency:
+                continue
+            bucket = paid_raw.setdefault(agent, {})
+            bucket[currency] = bucket.get(currency, 0) + float(amount)
+        zero["paid"] = {a: {k: round(v, 9) for k, v in sorted(cur.items())}
+                           for a, cur in sorted(paid_raw.items())}
+        payable_raw = {}
+        for agent in set(owed_raw) | set(paid_raw):
+            for currency in set(owed_raw.get(agent, {})) | set(paid_raw.get(agent, {})):
+                due = owed_raw.get(agent, {}).get(currency, 0) - paid_raw.get(agent, {}).get(currency, 0)
+                payable_raw.setdefault(agent, {})[currency] = due
+        zero["payable"] = {a: {k: round(v, 9) for k, v in sorted(cur.items())}
+                              for a, cur in sorted(payable_raw.items())}
         return zero
 
     def get_referrer(self, user_id):
@@ -937,6 +1017,31 @@ def make_handler(db):
             code = str(body.get("code") or "").strip().upper()
             return self._json({"ok": True, "code": code, "revoked_at": at})
 
+        def _payout(self):
+            """POST /api/payout — localhost only: record an off-band payout."""
+            peer = (self.client_address[0] if self.client_address else "")
+            if peer not in ("127.0.0.1", "::1"):
+                return self._json({"ok": False, "error": "payout only from this machine"}, 403)
+            try:
+                n = int(self.headers.get("content-length") or 0)
+            except ValueError:
+                n = 0
+            if n > 1_000_000:
+                return self._json({"ok": False, "error": "too large"}, 413)
+            try:
+                body = json.loads(self.rfile.read(n) or b"{}")
+            except (ValueError, OSError):
+                return self._json({"ok": False, "error": "bad json"}, 400)
+            try:
+                at = db.record_payout(body.get("agent"), body.get("amount"),
+                                      body.get("currency"), body.get("ref", ""))
+            except ValueError as e:
+                return self._json({"ok": False, "error": str(e)}, 400)
+            return self._json({"ok": True, "agent": str(body.get("agent") or "").strip()[:120],
+                               "amount": body.get("amount"),
+                               "currency": str(body.get("currency") or "").strip().upper()[:16],
+                               "paid_at": at})
+
         def do_POST(self):
             u = urlparse(self.path)
             if u.path == "/api/claim":
@@ -949,6 +1054,8 @@ def make_handler(db):
                 return self._redeem()
             if u.path == "/api/revoke":
                 return self._revoke()
+            if u.path == "/api/payout":
+                return self._payout()
             if u.path != "/api/likes":
                 return self._json({"ok": False, "error": "not found"}, 404)
             dev = self._auth()
