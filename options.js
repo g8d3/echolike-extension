@@ -33,10 +33,42 @@ async function usage(s) {
     el.textContent = usageText(u);
   } catch (e) { /* offline inbox: line stays empty, nothing breaks */ }
 }
+async function redeem() {
+  const codeEl = $("redeem_code"), msgEl = $("msgRedeem");
+  const code = ((codeEl && codeEl.value) || "").trim();
+  if (!code) { texto(msgEl, t("errRedeemBlank"), false); return; }
+  const s = await ext.storage.local.get({ inbox_url: "", device_token: "" });
+  if (!s.inbox_url || !s.device_token) { texto(msgEl, t("notConnected"), false); return; }
+  texto(msgEl, t("redeeming"), true);
+  let r;
+  try {
+    r = await fetch(s.inbox_url.replace(/\/$/, "") + "/api/redeem", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer " + s.device_token },
+      body: JSON.stringify({ code })
+    });
+  } catch (e) { texto(msgEl, t("errCantReach"), false); return; }
+  let j = null;
+  try { j = await r.json(); } catch (e) {}
+  if (r.ok && j && j.ok) {
+    codeEl.value = "";
+    texto(msgEl, t("redeemOk", [String(j.granted_total ?? "")]), true);
+    await pintar();
+    return;
+  }
+  const err = String((j && j.error) || "");
+  if (r.status === 409 || /already redeemed/.test(err)) texto(msgEl, t("errRedeemUsed"), false);
+  else if (r.status === 401) texto(msgEl, t("errBadToken"), false);
+  else if (/not found/.test(err)) texto(msgEl, t("errRedeemOldServer"), false);
+  else if (r.status === 404) texto(msgEl, t("errRedeemUnknown"), false);
+  else texto(msgEl, err || t("stateError"), false);
+}
 async function pintar() {
   $("ver").textContent = ext.runtime.getManifest().version;
   const s = await ext.storage.local.get({ sync: false, datos: [], transport: "direct", inbox_url: "", device_token: "" });
   usage(s);
+  const box = $("boxRedeem");
+  if (box) box.style.display = (s.inbox_url && s.device_token) ? "" : "none";
   $("sync").checked = !!s.sync;
   $("nlocal").textContent = String(s.datos.length) + (s.sync ? " ✓" : "");
   $("transport").value = s.transport || "direct";
@@ -108,6 +140,8 @@ async function conectar() {
   texto($("msgInbox"), (test && test.error) || t("stateError"), false);
 }
 
+if ($("redeem")) $("redeem").onclick = redeem;
+if ($("redeem_code")) $("redeem_code").addEventListener("keydown", (e) => { if (e.key === "Enter") redeem(); });
 $("conectar").onclick = conectar;
 if ($("auto")) $("auto").onclick = async () => {
   texto($("msgInbox"), t("connecting"), true);

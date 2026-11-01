@@ -400,5 +400,26 @@
   },
   "errOldServer": {
     "message": "That inbox is an older version: update it or use a newer server."
+  },
+  "redeemLabel": {
+    "message": "Redeem"
+  },
+  "redeeming": {
+    "message": "Redeeming…"
+  },
+  "redeemOk": {
+    "message": "Redeemed — granted total $1."
+  },
+  "errRedeemBlank": {
+    "message": "Paste a code first (EL-XXXXXXXX)."
+  },
+  "errRedeemUsed": {
+    "message": "That code was already redeemed."
+  },
+  "errRedeemUnknown": {
+    "message": "Unknown code — check it and try again."
+  },
+  "errRedeemOldServer": {
+    "message": "That inbox is too old for redeem codes: update server.py."
   }
 }

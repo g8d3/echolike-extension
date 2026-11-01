@@ -396,5 +396,26 @@
   },
   "errOldServer": {
     "message": "Ese inbox es una versión vieja: actualízalo o usa un servidor más nuevo."
+  },
+  "redeemLabel": {
+    "message": "Canjear"
+  },
+  "redeeming": {
+    "message": "Canjeando…"
+  },
+  "redeemOk": {
+    "message": "Canjeado — total otorgado $1."
+  },
+  "errRedeemBlank": {
+    "message": "Pega un código primero (EL-XXXXXXXX)."
+  },
+  "errRedeemUsed": {
+    "message": "Ese código ya fue canjeado."
+  },
+  "errRedeemUnknown": {
+    "message": "Código desconocido — revísalo e inténtalo de nuevo."
+  },
+  "errRedeemOldServer": {
+    "message": "Ese inbox es muy viejo para códigos: actualiza server.py."
   }
 }
