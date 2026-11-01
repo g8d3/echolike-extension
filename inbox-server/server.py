@@ -325,6 +325,16 @@ class DB:
         expires_days (None or '' = never expires, else an integer number of
         days 1..3650) stamps expires_at; redeeming past it raises
         LookupError("expired")."""
+        return self.mint_codes(credits, reason, expires_days, 1)[0]
+
+    def mint_codes(self, credits, reason="", expires_days=None, count=1):
+        """Mint count single-use prepaid codes worth credits. Returns [codes].
+
+        One call per launch batch: the owner mints N codes with one reason
+        and one deadline instead of N calls. Same validation as mint_code,
+        plus count (None or '' = 1, else an integer 1..100; bool/str/0/
+        negative rejected with ValueError). Every code carries the same
+        credits, reason and expires_at."""
         if isinstance(credits, bool) or not isinstance(credits, int) or credits <= 0:
             raise ValueError("credits must be a positive integer")
         reason = str(reason or "")[:200]
@@ -336,16 +346,27 @@ class DB:
             raise ValueError("expires_days must be between 1 and 3650")
         else:
             expires_at = (datetime.now(timezone.utc) + timedelta(days=expires_days)).isoformat()
-        for _ in range(10):
-            code = "EL-" + secrets.token_hex(4).upper()
-            try:
-                self.c.execute("INSERT INTO grant_codes (code, credits, reason, created_at, expires_at) VALUES (?,?,?,?,?)",
-                               (code, credits, reason, utcnow(), expires_at))
-                self.c.commit()
-                return code
-            except sqlite3.IntegrityError:
-                continue
-        raise ValueError("could not mint a unique code")
+        if count is None or count == "":
+            count = 1
+        if isinstance(count, bool) or not isinstance(count, int):
+            raise ValueError("count must be an integer number of codes")
+        if not 1 <= count <= 100:
+            raise ValueError("count must be between 1 and 100")
+        codes = []
+        for _ in range(count):
+            for _ in range(10):
+                code = "EL-" + secrets.token_hex(4).upper()
+                try:
+                    self.c.execute("INSERT INTO grant_codes (code, credits, reason, created_at, expires_at) VALUES (?,?,?,?,?)",
+                                   (code, credits, reason, utcnow(), expires_at))
+                    self.c.commit()
+                    codes.append(code)
+                    break
+                except sqlite3.IntegrityError:
+                    continue
+            else:
+                raise ValueError("could not mint a unique code")
+        return codes
 
     def redeem_code(self, user_id, code):
         """Redeem a prepaid code into granted credits. Returns the new total.
@@ -696,7 +717,7 @@ def make_handler(db):
                                "balance": db.get_usage(body.get("user_id"))["balance"]})
 
         def _mint(self):
-            """POST /api/mint — localhost only: mint one prepaid code."""
+            """POST /api/mint — localhost only: mint one batch of prepaid codes."""
             peer = (self.client_address[0] if self.client_address else "")
             if peer not in ("127.0.0.1", "::1"):
                 return self._json({"ok": False, "error": "mint only from this machine"}, 403)
@@ -711,13 +732,15 @@ def make_handler(db):
             except (ValueError, OSError):
                 return self._json({"ok": False, "error": "bad json"}, 400)
             try:
-                code = db.mint_code(body.get("credits"), body.get("reason", ""),
-                                    body.get("expires_days"))
+                codes = db.mint_codes(body.get("credits"), body.get("reason", ""),
+                                      body.get("expires_days"),
+                                      body.get("count", 1) if "count" in body else 1)
             except ValueError as e:
                 return self._json({"ok": False, "error": str(e)}, 400)
-            latest = db.list_codes(1)
-            exp = latest[0]["expires_at"] if latest and latest[0]["code"] == code else None
-            return self._json({"ok": True, "code": code,
+            latest = {c["code"]: c for c in db.list_codes(len(codes))}
+            exp = latest[codes[0]]["expires_at"] if codes[0] in latest else None
+            return self._json({"ok": True, "code": codes[0],
+                               "codes": codes,
                                "credits": body.get("credits"),
                                "reason": str(body.get("reason", "") or "")[:200],
                                "expires_at": exp})
