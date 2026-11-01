@@ -10,6 +10,13 @@ document.querySelectorAll("[data-i18n]").forEach((el) => {
   if (m && m !== k) el.textContent = m;
 });
 
+function usageText(u) {
+  const c = (u && u.credits) || {}, q = (u && u.quota) || {}, b = (u && u.balance) || null;
+  let s = (c.today ?? "?") + " credits today · " + (q.left_today ?? "?") + " left";
+  if (b && typeof b.left_total === "number")
+    s += " · balance " + b.left_total + " (granted " + (b.granted_total ?? "?") + ")";
+  return s;
+}
 async function usage(s) {
   const el = $("msgUsage");
   if (!el) return;
@@ -20,8 +27,7 @@ async function usage(s) {
     if (!r.ok) return;
     const u = await r.json();
     if (!u || !u.ok) return;
-    const c = u.credits || {}, q = u.quota || {};
-    el.textContent = (c.today ?? "?") + " credits today · " + (q.left_today ?? "?") + " left";
+    el.textContent = usageText(u);
   } catch (e) { /* offline inbox: line stays empty, nothing breaks */ }
 }
 async function pintar() {
