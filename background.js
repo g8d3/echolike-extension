@@ -17,6 +17,60 @@ function parseCodigo(raw) {
 }
 async function syncOn() { await migrar(); return !!(await ext.storage.local.get({ sync: false })).sync; }
 const INBOX_DEFAULT = "";
+// Zero-config bootstrap: install-and-done. The extension probes these in order
+// (saved server first — sticky, never silently move data — then same-machine,
+// then the directory mirror) and claims a token by itself. Paste stays as fallback.
+const INBOX_CANDIDATES = ["http://127.0.0.1:8911"];
+const INBOX_DIRECTORY_URL = "https://echolike.app/inbox-servers.json";
+async function sondear(url, ms) {
+  const t0 = Date.now();
+  const c = new AbortController();
+  const to = setTimeout(() => { try { c.abort(); } catch (e) {} }, ms || 2000);
+  try {
+    const r = await fetch(url.replace(/\/$/, "") + "/api/health", { cache: "no-store", signal: c.signal });
+    if (!r.ok) return null;
+    const j = await r.json();
+    if (!j || !j.ok) return null;
+    return { url: url.replace(/\/$/, ""), rtt: Date.now() - t0, api: j.api || 1 };
+  } catch (e) { return null; }
+  finally { clearTimeout(to); }
+}
+async function autoconectar(origen) {
+  // 1. sticky: the server the user already chose wins if it still answers
+  const g = await ext.storage.local.get({ inbox_url: INBOX_DEFAULT, device_token: "" });
+  if (g.inbox_url && g.device_token) {
+    const h = await sondear(g.inbox_url, 2500);
+    if (h) return { ok: true, inbox_url: g.inbox_url, sticky: true };
+  }
+  // 2. same-machine candidates (desktop: no paste needed)
+  const vistos = [];
+  for (const c of INBOX_CANDIDATES) {
+    const h = await sondear(c, 1500);
+    if (h && (h.api || 1) >= 2) vistos.push(h);
+  }
+  // 3. directory mirror (discovery only: every entry is probed, latency ranks)
+  try {
+    const dir = origen === "local" ? null : await (await fetch(INBOX_DIRECTORY_URL, { cache: "no-store" })).json();
+    const lista = (dir && dir.servers) || [];
+    for (const s of lista) {
+      if (!s || !s.url) continue;
+      const h = await sondear(s.url, 2000);
+      if (h && (h.api || 1) >= 2) vistos.push(h);
+    }
+  } catch (e) { /* offline directory: keep what we have */ }
+  vistos.sort((a, b) => a.rtt - b.rtt);
+  for (const h of vistos) {
+    try {
+      const r = await fetch(h.url + "/api/claim", { method: "POST" });
+      const j = await r.json();
+      if (j && j.device_token) {
+        await ext.storage.local.set({ inbox_url: h.url, device_token: j.device_token, transport: "direct", sync: true });
+        return { ok: true, inbox_url: h.url, user_id: j.user_id || null };
+      }
+    } catch (e) { /* try the next candidate */ }
+  }
+  return { ok: false, error: t("errCantReach") };
+}
 async function transporte() {
   await migrar();
   const s = await ext.storage.local.get({ transport: "direct", inbox_url: INBOX_DEFAULT, device_token: "" });
@@ -235,7 +289,8 @@ ext.runtime.onMessage.addListener((m, _s, responder) => {
     : m && m.tipo === "importar" ? importar(m.data)
     : m && m.tipo === "sync" ? (async () => { await ext.storage.local.set({ sync: !!m.on }); if (m.on && (await transporte()) !== "direct") await cfg(); return { ok: true, sync: !!m.on }; })()
     : m && m.tipo === "transport" ? ext.storage.local.set({ transport: m.mode }).then(() => ({ ok: true, transport: m.mode }))
-    : m && m.tipo === "directConfig" ? (async () => { const cur = await ext.storage.local.get({ inbox_url: "", device_token: "" }); const patch = {}; if (m.inbox_url) patch.inbox_url = String(m.inbox_url); if (m.device_token) patch.device_token = String(m.device_token); await ext.storage.local.set(patch); return { ok: true }; })() : null;
+    : m && m.tipo === "directConfig" ? (async () => { const cur = await ext.storage.local.get({ inbox_url: "", device_token: "" }); const patch = {}; if (m.inbox_url) patch.inbox_url = String(m.inbox_url); if (m.device_token) patch.device_token = String(m.device_token); await ext.storage.local.set(patch); return { ok: true }; })()
+    : m && m.tipo === "autoconectar" ? autoconectar(m.origen) : null;
   if (!p) return;
   p.then(responder, (e) => responder({ ok: false, error: String(e && e.message || e) })); return true;
 });
@@ -288,4 +343,4 @@ if (ext.runtime.onMessageExternal && ext.runtime.onMessageExternal.addListener) 
   })().then(responder, (e) => responder({ ok: false, error: String(e && e.message || e) }));
   return true;
 });
-if (typeof module !== "undefined") module.exports = { parseCodigo, INBOX_DEFAULT };
+if (typeof module !== "undefined") module.exports = { parseCodigo, INBOX_DEFAULT, INBOX_CANDIDATES, sondear, autoconectar };

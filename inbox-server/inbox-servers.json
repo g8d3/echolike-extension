@@ -1,0 +1,18 @@
+{
+  "v": 1,
+  "updated": "2026-11-01T00:00:00Z",
+  "note": "Directory MIRROR seed (discovery only, never trust). The canonical file will live at https://echolike.app/inbox-servers.json once the owner approves a site publish. Clients probe every entry and rank by measured latency; a dead server is dropped, never kept.",
+  "servers": [
+    {
+      "id": "local-pc",
+      "name": "This PC (same machine)",
+      "url": "http://127.0.0.1:8911",
+      "api": 2,
+      "price": { "model": "free" },
+      "region": "local",
+      "claim": "private",
+      "health": "/api/health",
+      "notes": "same-machine default: the extension tries this first, no paste needed"
+    }
+  ]
+}

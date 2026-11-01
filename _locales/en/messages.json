@@ -358,6 +358,10 @@
   "connectLabel": {
     "message": "Connect"
   },
+  "autoLabel": {
+    "message": "Find my inbox",
+    "description": "Zero-config button: probe and claim automatically"
+  },
   "connecting": {
     "message": "Connecting…"
   },

@@ -85,6 +85,16 @@ async function conectar() {
 }
 
 $("conectar").onclick = conectar;
+if ($("auto")) $("auto").onclick = async () => {
+  texto($("msgInbox"), t("connecting"), true);
+  const r = await send({ tipo: "autoconectar" });
+  if (r && r.ok) {
+    const test = await send({ tipo: "prueba" });
+    if (test && test.ok) { texto($("msgInbox"), t("connectedTo", [r.inbox_url]), true); await pintar(); return; }
+    texto($("msgInbox"), (test && test.error) || t("stateError"), false); return;
+  }
+  texto($("msgInbox"), (r && r.error) || t("stateError"), false);
+};
 $("inbox_url").addEventListener("keydown", (e) => { if (e.key === "Enter") conectar(); });
 
 if ($("guardarInbox")) $("guardarInbox").onclick = async () => {
