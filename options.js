@@ -10,9 +10,24 @@ document.querySelectorAll("[data-i18n]").forEach((el) => {
   if (m && m !== k) el.textContent = m;
 });
 
+async function usage(s) {
+  const el = $("msgUsage");
+  if (!el) return;
+  el.textContent = "";
+  if (!s.inbox_url || !s.device_token) return;
+  try {
+    const r = await fetch(s.inbox_url.replace(/\/$/, "") + "/api/usage", { headers: { authorization: "Bearer " + s.device_token } });
+    if (!r.ok) return;
+    const u = await r.json();
+    if (!u || !u.ok) return;
+    const c = u.credits || {}, q = u.quota || {};
+    el.textContent = (c.today ?? "?") + " credits today · " + (q.left_today ?? "?") + " left";
+  } catch (e) { /* offline inbox: line stays empty, nothing breaks */ }
+}
 async function pintar() {
   $("ver").textContent = ext.runtime.getManifest().version;
   const s = await ext.storage.local.get({ sync: false, datos: [], transport: "direct", inbox_url: "", device_token: "" });
+  usage(s);
   $("sync").checked = !!s.sync;
   $("nlocal").textContent = String(s.datos.length) + (s.sync ? " ✓" : "");
   $("transport").value = s.transport || "direct";
