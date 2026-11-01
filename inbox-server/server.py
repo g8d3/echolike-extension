@@ -39,6 +39,7 @@ MAX_DEVICES = int(os.environ.get("ECHO_MAX_DEVICES", "10"))
 # shows them before writing (see /api/health prices). Charging comes later.
 PRICE_LIKE_IN = int(os.environ.get("ECHO_PRICE_LIKE_IN", "1"))
 PRICE_READ = int(os.environ.get("ECHO_PRICE_READ", "0"))
+PRICE_ANALYSIS = int(os.environ.get("ECHO_PRICE_ANALYSIS", "5"))
 FREE_DAILY = int(os.environ.get("ECHO_FREE_DAILY", "2000"))
 ENFORCE_QUOTA = os.environ.get("ECHO_ENFORCE_QUOTA") == "1"
 # The producer knows when a row is durable, so it tells the analysis pipeline instead of
@@ -206,14 +207,17 @@ class DB:
         likes_total = self.c.execute("SELECT COUNT(*) FROM likes WHERE device IN (SELECT id FROM devices WHERE user_id=?)",
                                      (user_id,)).fetchone()[0]
         tin, trd = (row[0] if row else 0), (row[1] if row else 0)
+        inf = self.get_inference(user_id)
+        ctoday = tin * PRICE_LIKE_IN + trd * PRICE_READ + inf["today"]["calls"] * PRICE_ANALYSIS
+        ctotal = t[0] * PRICE_LIKE_IN + t[1] * PRICE_READ + inf["total"]["calls"] * PRICE_ANALYSIS
         return {"user_id": user_id, "day": day,
                 "today": {"likes_in": tin, "inbox_reads": trd},
                 "total": {"likes_in": t[0], "inbox_reads": t[1], "likes_stored": likes_total},
-                "credits": {"today": tin * PRICE_LIKE_IN + trd * PRICE_READ,
-                              "total": t[0] * PRICE_LIKE_IN + t[1] * PRICE_READ,
-                              "prices": {"inbox_write": PRICE_LIKE_IN, "inbox_read": PRICE_READ}},
-                "quota": {"free_daily": FREE_DAILY, "used_today": tin,
-                            "left_today": max(0, FREE_DAILY - tin), "enforcing": ENFORCE_QUOTA},
+                "credits": {"today": ctoday, "total": ctotal,
+                              "prices": {"inbox_write": PRICE_LIKE_IN, "inbox_read": PRICE_READ,
+                                         "analysis_call": PRICE_ANALYSIS}},
+                "quota": {"free_daily": FREE_DAILY, "used_today": ctoday,
+                            "left_today": max(0, FREE_DAILY - ctoday), "enforcing": ENFORCE_QUOTA},
                 "pipeline": self.get_pipeline(user_id),
                 "inference": self.get_inference(user_id)}
 
@@ -372,6 +376,7 @@ def make_handler(db):
                                    "devices": db.device_count(), "users": db.user_count(),
                                    "multi_tenant": True,
                                    "prices": {"inbox_write": PRICE_LIKE_IN, "inbox_read": PRICE_READ,
+                                               "analysis_call": PRICE_ANALYSIS,
                                                "free_daily": FREE_DAILY, "enforcing": ENFORCE_QUOTA}})
             if u.path == "/api/me":
                 dev, uid = self._identity()
