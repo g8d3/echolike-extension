@@ -117,6 +117,11 @@ class DB:
         # after each muse call (calls, wall seconds, output chars). The cash
         # register counts first (handoff), this counts what was really spent.
         self.c.execute("CREATE TABLE IF NOT EXISTS inference (day TEXT NOT NULL, user_id TEXT NOT NULL, calls INTEGER NOT NULL DEFAULT 0, seconds_ms INTEGER NOT NULL DEFAULT 0, chars INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, user_id))")
+        # Credit grants: the funding side of the cash register. The meter above
+        # counts what each user spent; this records what was given to them
+        # (founder free credits, promo, manual top-ups after a crypto payment
+        # is seen on-chain). Bookkeeping only: granting moves no money.
+        self.c.execute("CREATE TABLE IF NOT EXISTS grants (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, day TEXT NOT NULL, user_id TEXT NOT NULL, credits INTEGER NOT NULL, reason TEXT NOT NULL DEFAULT '')")
         self.c.commit()
         self._ensure_users()
 
@@ -210,6 +215,7 @@ class DB:
         inf = self.get_inference(user_id)
         ctoday = tin * PRICE_LIKE_IN + trd * PRICE_READ + inf["today"]["calls"] * PRICE_ANALYSIS
         ctotal = t[0] * PRICE_LIKE_IN + t[1] * PRICE_READ + inf["total"]["calls"] * PRICE_ANALYSIS
+        granted = self.get_grants(user_id)["total"]
         return {"user_id": user_id, "day": day,
                 "today": {"likes_in": tin, "inbox_reads": trd},
                 "total": {"likes_in": t[0], "inbox_reads": t[1], "likes_stored": likes_total},
@@ -219,7 +225,9 @@ class DB:
                 "quota": {"free_daily": FREE_DAILY, "used_today": ctoday,
                             "left_today": max(0, FREE_DAILY - ctoday), "enforcing": ENFORCE_QUOTA},
                 "pipeline": self.get_pipeline(user_id),
-                "inference": self.get_inference(user_id)}
+                "inference": self.get_inference(user_id),
+                "balance": {"granted_total": granted, "spent_total": ctotal,
+                              "left_total": granted - ctotal}}
 
     def bump_pipeline(self, user_id, likes_n):
         """One pipeline handoff: the analyser will spend inference on these likes."""
@@ -261,6 +269,30 @@ class DB:
                     "total": {"calls": 0, "seconds": 0.0, "chars": 0}}
         return {"today": {"calls": row[0] if row else 0, "seconds": round((row[1] if row else 0) / 1000.0, 2), "chars": row[2] if row else 0},
                 "total": {"calls": t[0], "seconds": round(t[1] / 1000.0, 2), "chars": t[2]}}
+
+    def grant_credits(self, user_id, credits, reason=""):
+        """Record gifted credits for a user. Returns the new granted total.
+
+        Raises ValueError on bad input. Never touches enforcement: the quota
+        gate reads FREE_DAILY only, so grants are visible but refuse nothing
+        until the owner turns enforcement on."""
+        if not isinstance(user_id, str) or not user_id:
+            raise ValueError("user_id must be a non-empty string")
+        if isinstance(credits, bool) or not isinstance(credits, int) or credits <= 0:
+            raise ValueError("credits must be a positive integer")
+        reason = str(reason or "")[:200]
+        self.c.execute("INSERT INTO grants (at, day, user_id, credits, reason) VALUES (?,?,?,?,?)",
+                       (utcnow(), today(), user_id, credits, reason))
+        self.c.commit()
+        return self.get_grants(user_id)["total"]
+
+    def get_grants(self, user_id):
+        try:
+            row = self.c.execute("SELECT COALESCE(SUM(credits),0), COUNT(*) FROM grants WHERE user_id=?",
+                                 (user_id,)).fetchone()
+        except sqlite3.Error:
+            return {"total": 0, "count": 0}
+        return {"total": row[0] if row else 0, "count": row[1] if row else 0}
 
     def quota_left(self, user_id):
         """Billable units the user may still store today. Infinite when not enforcing."""
@@ -427,10 +459,38 @@ def make_handler(db):
                 return
             return self._json({"ok": False, "error": "not found"}, 404)
 
+        def _grant(self):
+            """POST /api/grant — localhost only, no token needed: the operator
+            records gifted credits (founder free tier, promo, a top-up after a
+            payment is seen on-chain). Bookkeeping only, moves no money."""
+            peer = (self.client_address[0] if self.client_address else "")
+            if peer not in ("127.0.0.1", "::1"):
+                return self._json({"ok": False, "error": "grant only from this machine"}, 403)
+            try:
+                n = int(self.headers.get("content-length") or 0)
+            except ValueError:
+                n = 0
+            if n > 1_000_000:
+                return self._json({"ok": False, "error": "too large"}, 413)
+            try:
+                body = json.loads(self.rfile.read(n) or b"{}")
+            except (ValueError, OSError):
+                return self._json({"ok": False, "error": "bad json"}, 400)
+            try:
+                total = db.grant_credits(body.get("user_id"), body.get("credits"),
+                                         body.get("reason", ""))
+            except ValueError as e:
+                return self._json({"ok": False, "error": str(e)}, 400)
+            return self._json({"ok": True, "user_id": body.get("user_id"),
+                               "granted_total": total,
+                               "balance": db.get_usage(body.get("user_id"))["balance"]})
+
         def do_POST(self):
             u = urlparse(self.path)
             if u.path == "/api/claim":
                 return self._claim()
+            if u.path == "/api/grant":
+                return self._grant()
             if u.path != "/api/likes":
                 return self._json({"ok": False, "error": "not found"}, 404)
             dev = self._auth()
