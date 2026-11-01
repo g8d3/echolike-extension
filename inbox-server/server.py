@@ -48,6 +48,12 @@ INGEST_CMD = os.environ.get("ECHO_INGEST_CMD",
                             os.path.expanduser("~/code/p4/e092-echolike/operador/inbox_a_pipeline.py"))
 OPEN_CLAIM = os.environ.get("ECHO_OPEN_CLAIM") == "1"
 CLAIM_PER_IP_HOUR = int(os.environ.get("ECHO_CLAIM_PER_HOUR", "3"))
+# Checkout hint (read-only): public receive addresses so a buyer knows where
+# to pay for credits. Env-driven, never hardcoded; empty = unset = None in
+# /api/health. Showing them moves no money: the owner still mints the prepaid
+# code by hand after seeing the payment off-band.
+CHECKOUT_SOL = os.environ.get("ECHO_SOL_ADDRESS", "").strip()
+CHECKOUT_EVM = os.environ.get("ECHO_EVM_ADDRESS", "").strip()
 OWNER_USER = "u_owner"
 
 
@@ -629,7 +635,9 @@ def make_handler(db):
                                    "multi_tenant": True,
                                    "prices": {"inbox_write": PRICE_LIKE_IN, "inbox_read": PRICE_READ,
                                                "analysis_call": PRICE_ANALYSIS,
-                                               "free_daily": FREE_DAILY, "enforcing": ENFORCE_QUOTA}})
+                                               "free_daily": FREE_DAILY, "enforcing": ENFORCE_QUOTA},
+                                   "checkout": {"sol": CHECKOUT_SOL or None,
+                                                "evm": CHECKOUT_EVM or None}})
             if u.path == "/api/me":
                 dev, uid = self._identity()
                 if not dev:
