@@ -506,6 +506,39 @@ class DB:
                  "sale_currency": r[9] or None,
                  "sale_ref": r[10] or None} for r in rows]
 
+    def get_sales_totals(self):
+        """Recorded revenue totals over prepaid codes, read-only.
+
+        {codes, redeemed, revoked, outstanding, with_sale, sales:{CUR: total}}.
+        Sums every row carrying a sale (a revoked code keeps its note: the
+        money arrived, the code was killed); free/promo rows count in codes
+        but add nothing. Totals always cover the whole book, never just the
+        ?limit= window of /api/codes. Sums round to 9 decimals (a lamport)
+        so float dust never reaches the owner. No new table, never an error,
+        unknown state is all zeros."""
+        zero = {"codes": 0, "redeemed": 0, "revoked": 0, "outstanding": 0,
+                "with_sale": 0, "sales": {}}
+        try:
+            rows = self.c.execute(
+                "SELECT redeemed_by, revoked, sale_amount, sale_currency "
+                "FROM grant_codes").fetchall()
+        except sqlite3.Error:
+            return zero
+        sales = {}
+        for redeemed_by, revoked, amount, currency in rows:
+            zero["codes"] += 1
+            if redeemed_by:
+                zero["redeemed"] += 1
+            elif revoked:
+                zero["revoked"] += 1
+            else:
+                zero["outstanding"] += 1
+            if amount is not None and currency:
+                zero["with_sale"] += 1
+                sales[currency] = sales.get(currency, 0) + float(amount)
+        zero["sales"] = {k: round(v, 9) for k, v in sorted(sales.items())}
+        return zero
+
     def get_referrer(self, user_id):
         """The agent id that first brought this user, or None.
 
@@ -718,7 +751,8 @@ def make_handler(db):
                     limit = max(1, min(500, int(q.get("limit", ["100"])[0])))
                 except ValueError:
                     limit = 100
-                return self._json({"ok": True, "codes": db.list_codes(limit)})
+                return self._json({"ok": True, "codes": db.list_codes(limit),
+                                     "totals": db.get_sales_totals()})
             if u.path == "/" or u.path == "/index.html":
                 items = ""
                 try:
