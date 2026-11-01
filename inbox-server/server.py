@@ -126,6 +126,12 @@ class DB:
         # never overwritten (last-touch theft and self-dealing pay nothing).
         # Set alongside a grant, read by /api/usage for commission payouts.
         self.c.execute("CREATE TABLE IF NOT EXISTS referrals (user_id TEXT PRIMARY KEY, referred_by TEXT NOT NULL, at TEXT NOT NULL)")
+        # Prepaid codes: the first sellable unit. The owner mints a code
+        # (localhost POST /api/mint) after seeing a payment off-band, hands
+        # the code to the buyer, and the buyer redeems it (authed POST
+        # /api/redeem) into granted credits. Single-use: first redeemer wins.
+        # Bookkeeping only: minting and redeeming move no money.
+        self.c.execute("CREATE TABLE IF NOT EXISTS grant_codes (code TEXT PRIMARY KEY, credits INTEGER NOT NULL, reason TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, redeemed_by TEXT NOT NULL DEFAULT '', redeemed_at TEXT NOT NULL DEFAULT '')")
         self.c.commit()
         self._ensure_users()
 
@@ -296,6 +302,51 @@ class DB:
         if isinstance(referred_by, str) and referred_by and referred_by != user_id:
             self.c.execute("INSERT OR IGNORE INTO referrals (user_id, referred_by, at) VALUES (?,?,?)",
                            (user_id, referred_by[:120], utcnow()))
+        self.c.commit()
+        return self.get_grants(user_id)["total"]
+
+    def mint_code(self, credits, reason=""):
+        """Mint one single-use prepaid code worth credits. Returns the code.
+
+        Localhost only (the HTTP layer enforces it): the owner mints after
+        seeing a payment off-band and hands the code to the buyer. ValueError
+        on bad input; reason cut at 200 chars, stored for the grant history."""
+        if isinstance(credits, bool) or not isinstance(credits, int) or credits <= 0:
+            raise ValueError("credits must be a positive integer")
+        reason = str(reason or "")[:200]
+        for _ in range(10):
+            code = "EL-" + secrets.token_hex(4).upper()
+            try:
+                self.c.execute("INSERT INTO grant_codes (code, credits, reason, created_at) VALUES (?,?,?,?)",
+                               (code, credits, reason, utcnow()))
+                self.c.commit()
+                return code
+            except sqlite3.IntegrityError:
+                continue
+        raise ValueError("could not mint a unique code")
+
+    def redeem_code(self, user_id, code):
+        """Redeem a prepaid code into granted credits. Returns the new total.
+
+        Single-use: the first redeemer wins, a second redeem raises
+        LookupError("already redeemed"). Unknown codes raise LookupError,
+        blank codes ValueError. The grant carries the code's stored reason,
+        so the history shows why the credits exist."""
+        if not isinstance(user_id, str) or not user_id:
+            raise ValueError("user_id must be a non-empty string")
+        if not isinstance(code, str) or not code.strip():
+            raise ValueError("code must be a non-empty string")
+        code = code.strip().upper()
+        row = self.c.execute("SELECT credits, reason, redeemed_by FROM grant_codes WHERE code=?",
+                             (code,)).fetchone()
+        if not row:
+            raise LookupError("unknown code")
+        if row[2]:
+            raise LookupError("already redeemed")
+        self.c.execute("INSERT INTO grants (at, day, user_id, credits, reason) VALUES (?,?,?,?,?)",
+                       (utcnow(), today(), user_id, row[0], row[1]))
+        self.c.execute("UPDATE grant_codes SET redeemed_by=?, redeemed_at=? WHERE code=?",
+                       (user_id, utcnow(), code))
         self.c.commit()
         return self.get_grants(user_id)["total"]
 
@@ -554,12 +605,67 @@ def make_handler(db):
                                "granted_total": total,
                                "balance": db.get_usage(body.get("user_id"))["balance"]})
 
+        def _mint(self):
+            """POST /api/mint — localhost only: mint one prepaid code."""
+            peer = (self.client_address[0] if self.client_address else "")
+            if peer not in ("127.0.0.1", "::1"):
+                return self._json({"ok": False, "error": "mint only from this machine"}, 403)
+            try:
+                n = int(self.headers.get("content-length") or 0)
+            except ValueError:
+                n = 0
+            if n > 1_000_000:
+                return self._json({"ok": False, "error": "too large"}, 413)
+            try:
+                body = json.loads(self.rfile.read(n) or b"{}")
+            except (ValueError, OSError):
+                return self._json({"ok": False, "error": "bad json"}, 400)
+            try:
+                code = db.mint_code(body.get("credits"), body.get("reason", ""))
+            except ValueError as e:
+                return self._json({"ok": False, "error": str(e)}, 400)
+            return self._json({"ok": True, "code": code,
+                               "credits": body.get("credits"),
+                               "reason": str(body.get("reason", "") or "")[:200]})
+
+        def _redeem(self):
+            """POST /api/redeem — authed user redeems a prepaid code once."""
+            dev, uid = self._identity()
+            if not dev:
+                return self._json({"ok": False, "error": "unauthorized"}, 401)
+            try:
+                n = int(self.headers.get("content-length") or 0)
+            except ValueError:
+                n = 0
+            if n > 1_000_000:
+                return self._json({"ok": False, "error": "too large"}, 413)
+            try:
+                body = json.loads(self.rfile.read(n) or b"{}")
+            except (ValueError, OSError):
+                return self._json({"ok": False, "error": "bad json"}, 400)
+            try:
+                total = db.redeem_code(uid, body.get("code"))
+            except ValueError as e:
+                return self._json({"ok": False, "error": str(e)}, 400)
+            except LookupError as e:
+                msg = str(e)
+                if "already" in msg:
+                    return self._json({"ok": False, "error": msg}, 409)
+                return self._json({"ok": False, "error": msg}, 404)
+            return self._json({"ok": True, "user_id": uid,
+                               "granted_total": total,
+                               "balance": db.get_usage(uid)["balance"]})
+
         def do_POST(self):
             u = urlparse(self.path)
             if u.path == "/api/claim":
                 return self._claim()
             if u.path == "/api/grant":
                 return self._grant()
+            if u.path == "/api/mint":
+                return self._mint()
+            if u.path == "/api/redeem":
+                return self._redeem()
             if u.path != "/api/likes":
                 return self._json({"ok": False, "error": "not found"}, 404)
             dev = self._auth()
