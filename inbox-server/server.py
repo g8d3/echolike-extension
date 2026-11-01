@@ -350,6 +350,30 @@ class DB:
         self.c.commit()
         return self.get_grants(user_id)["total"]
 
+    def list_codes(self, limit=100):
+        """Prepaid code inventory, newest first.
+
+        Read-only view over grant_codes for the owner (localhost GET
+        /api/codes): [{code, credits, reason, created_at, redeemed_by,
+        redeemed_at}]. Unredeemed codes report redeemed_by/redeemed_at as
+        None, never an error; unknown state is an empty list. Limit clamped
+        to 1..500, default 100."""
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            limit = 100
+        limit = max(1, min(500, limit))
+        try:
+            rows = self.c.execute(
+                "SELECT code, credits, reason, created_at, redeemed_by, redeemed_at "
+                "FROM grant_codes ORDER BY rowid DESC LIMIT ?",
+                (limit,)).fetchall()
+        except sqlite3.Error:
+            return []
+        return [{"code": r[0], "credits": r[1], "reason": r[2],
+                 "created_at": r[3], "redeemed_by": r[4] or None,
+                 "redeemed_at": r[5] or None} for r in rows]
+
     def get_referrer(self, user_id):
         """The agent id that first brought this user, or None.
 
@@ -551,6 +575,16 @@ def make_handler(db):
                     limit = 50
                 db.bump_usage(uid, inbox_reads=1)
                 return self._json({"ok": True, "user_id": uid, "items": db.latest(uid, limit)})
+            if u.path == "/api/codes":
+                peer = (self.client_address[0] if self.client_address else "")
+                if peer not in ("127.0.0.1", "::1"):
+                    return self._json({"ok": False, "error": "codes only from this machine"}, 403)
+                q = parse_qs(u.query)
+                try:
+                    limit = max(1, min(500, int(q.get("limit", ["100"])[0])))
+                except ValueError:
+                    limit = 100
+                return self._json({"ok": True, "codes": db.list_codes(limit)})
             if u.path == "/" or u.path == "/index.html":
                 items = ""
                 try:
