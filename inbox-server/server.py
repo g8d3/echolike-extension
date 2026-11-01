@@ -149,6 +149,16 @@ class DB:
         # Added 2026-11-01; old rows backfill '' and read as None.
         if "expires_at" not in gcols:
             self.c.execute("ALTER TABLE grant_codes ADD COLUMN expires_at TEXT NOT NULL DEFAULT ''")
+        # Sale recording: what the buyer actually paid for these credits
+        # (sale_amount + sale_currency, optional sale_ref for the tx hash or
+        # note). The owner mints after seeing a payment off-band and writes
+        # down what arrived, so the sales book measures real revenue per code.
+        # Bookkeeping only: recording a sale moves no money and changes no
+        # gate. Added 2026-11-01; old rows backfill NULL/'' and read as None.
+        if "sale_amount" not in gcols:
+            self.c.execute("ALTER TABLE grant_codes ADD COLUMN sale_amount NUMERIC DEFAULT NULL")
+            self.c.execute("ALTER TABLE grant_codes ADD COLUMN sale_currency TEXT NOT NULL DEFAULT ''")
+            self.c.execute("ALTER TABLE grant_codes ADD COLUMN sale_ref TEXT NOT NULL DEFAULT ''")
         self.c.commit()
         self._ensure_users()
 
@@ -322,7 +332,36 @@ class DB:
         self.c.commit()
         return self.get_grants(user_id)["total"]
 
-    def mint_code(self, credits, reason="", expires_days=None):
+    @staticmethod
+    def _norm_sale(amount, currency, ref):
+        """Normalize an optional recorded sale. Returns (amount, currency, ref).
+
+        All three are optional (None or '' = absent). amount must be a
+        positive number when present; currency a non-empty string (stored
+        upper-cased, cut at 16 chars); ref a string cut at 200 chars.
+        amount and currency go together: one without the other raises
+        ValueError, because a sale without a unit is not measurable."""
+        if ref is None:
+            ref = ""
+        if not isinstance(ref, str):
+            raise ValueError("sale_ref must be a string")
+        ref = ref[:200]
+        if amount is None or amount == "":
+            amount = None
+        elif isinstance(amount, bool) or not isinstance(amount, (int, float)) or not amount > 0:
+            raise ValueError("sale_amount must be a positive number")
+        if currency is None or currency == "":
+            currency = None
+        elif not isinstance(currency, str) or not currency.strip():
+            raise ValueError("sale_currency must be a non-empty string")
+        else:
+            currency = currency.strip().upper()[:16]
+        if (amount is None) != (currency is None):
+            raise ValueError("sale_amount and sale_currency go together")
+        return amount, currency or "", ref
+
+    def mint_code(self, credits, reason="", expires_days=None, sale_amount=None,
+                  sale_currency=None, sale_ref=None):
         """Mint one single-use prepaid code worth credits. Returns the code.
 
         Localhost only (the HTTP layer enforces it): the owner mints after
@@ -330,17 +369,20 @@ class DB:
         on bad input; reason cut at 200 chars, stored for the grant history.
         expires_days (None or '' = never expires, else an integer number of
         days 1..3650) stamps expires_at; redeeming past it raises
-        LookupError("expired")."""
-        return self.mint_codes(credits, reason, expires_days, 1)[0]
+        LookupError("expired"). sale_amount/sale_currency/sale_ref record
+        what the buyer paid (see _norm_sale); the sales book shows it."""
+        return self.mint_codes(credits, reason, expires_days, 1, sale_amount,
+                               sale_currency, sale_ref)[0]
 
-    def mint_codes(self, credits, reason="", expires_days=None, count=1):
+    def mint_codes(self, credits, reason="", expires_days=None, count=1,
+                   sale_amount=None, sale_currency=None, sale_ref=None):
         """Mint count single-use prepaid codes worth credits. Returns [codes].
 
-        One call per launch batch: the owner mints N codes with one reason
-        and one deadline instead of N calls. Same validation as mint_code,
-        plus count (None or '' = 1, else an integer 1..100; bool/str/0/
-        negative rejected with ValueError). Every code carries the same
-        credits, reason and expires_at."""
+        One call per launch batch: the owner mints N codes with one reason,
+        one deadline and one sale instead of N calls. Same validation as
+        mint_code, plus count (None or '' = 1, else an integer 1..100;
+        bool/str/0/negative rejected with ValueError). Every code carries
+        the same credits, reason, expires_at and sale."""
         if isinstance(credits, bool) or not isinstance(credits, int) or credits <= 0:
             raise ValueError("credits must be a positive integer")
         reason = str(reason or "")[:200]
@@ -358,13 +400,14 @@ class DB:
             raise ValueError("count must be an integer number of codes")
         if not 1 <= count <= 100:
             raise ValueError("count must be between 1 and 100")
+        amount, currency, ref = self._norm_sale(sale_amount, sale_currency, sale_ref)
         codes = []
         for _ in range(count):
             for _ in range(10):
                 code = "EL-" + secrets.token_hex(4).upper()
                 try:
-                    self.c.execute("INSERT INTO grant_codes (code, credits, reason, created_at, expires_at) VALUES (?,?,?,?,?)",
-                                   (code, credits, reason, utcnow(), expires_at))
+                    self.c.execute("INSERT INTO grant_codes (code, credits, reason, created_at, expires_at, sale_amount, sale_currency, sale_ref) VALUES (?,?,?,?,?,?,?,?)",
+                                   (code, credits, reason, utcnow(), expires_at, amount, currency, ref))
                     self.c.commit()
                     codes.append(code)
                     break
@@ -435,10 +478,12 @@ class DB:
 
         Read-only view over grant_codes for the owner (localhost GET
         /api/codes): [{code, credits, reason, created_at, redeemed_by,
-        redeemed_at, revoked, expires_at}]. Unredeemed codes report redeemed_by/
+        redeemed_at, revoked, expires_at, sale_amount, sale_currency,
+        sale_ref}]. Unredeemed codes report redeemed_by/
         redeemed_at as None, live codes report revoked as None, codes minted
-        without a deadline report expires_at as None; never an
-        error, unknown state is an empty list. Limit clamped
+        without a deadline report expires_at as None, codes minted without a
+        recorded sale report sale_amount/sale_currency/sale_ref as None;
+        never an error, unknown state is an empty list. Limit clamped
         to 1..500, default 100."""
         try:
             limit = int(limit)
@@ -447,7 +492,8 @@ class DB:
         limit = max(1, min(500, limit))
         try:
             rows = self.c.execute(
-                "SELECT code, credits, reason, created_at, redeemed_by, redeemed_at, revoked, expires_at "
+                "SELECT code, credits, reason, created_at, redeemed_by, redeemed_at, revoked, expires_at, "
+                "sale_amount, sale_currency, sale_ref "
                 "FROM grant_codes ORDER BY rowid DESC LIMIT ?",
                 (limit,)).fetchall()
         except sqlite3.Error:
@@ -455,7 +501,10 @@ class DB:
         return [{"code": r[0], "credits": r[1], "reason": r[2],
                  "created_at": r[3], "redeemed_by": r[4] or None,
                  "redeemed_at": r[5] or None, "revoked": r[6] or None,
-                 "expires_at": r[7] or None} for r in rows]
+                 "expires_at": r[7] or None,
+                 "sale_amount": r[8],
+                 "sale_currency": r[9] or None,
+                 "sale_ref": r[10] or None} for r in rows]
 
     def get_referrer(self, user_id):
         """The agent id that first brought this user, or None.
@@ -742,16 +791,21 @@ def make_handler(db):
             try:
                 codes = db.mint_codes(body.get("credits"), body.get("reason", ""),
                                       body.get("expires_days"),
-                                      body.get("count", 1) if "count" in body else 1)
+                                      body.get("count", 1) if "count" in body else 1,
+                                      body.get("sale_amount"),
+                                      body.get("sale_currency"),
+                                      body.get("sale_ref", "") if "sale_ref" in body else "")
             except ValueError as e:
                 return self._json({"ok": False, "error": str(e)}, 400)
             latest = {c["code"]: c for c in db.list_codes(len(codes))}
-            exp = latest[codes[0]]["expires_at"] if codes[0] in latest else None
+            first = latest.get(codes[0], {}) if codes else {}
+            sale = {k: first.get(k) for k in ("sale_amount", "sale_currency", "sale_ref")}
             return self._json({"ok": True, "code": codes[0],
                                "codes": codes,
                                "credits": body.get("credits"),
                                "reason": str(body.get("reason", "") or "")[:200],
-                               "expires_at": exp})
+                               "expires_at": first.get("expires_at"),
+                               "sale": sale})
 
         def _redeem(self):
             """POST /api/redeem — authed user redeems a prepaid code once."""
