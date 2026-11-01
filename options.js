@@ -15,6 +15,9 @@ function usageText(u) {
   let s = (c.today ?? "?") + " credits today · " + (q.left_today ?? "?") + " left";
   if (b && typeof b.left_total === "number")
     s += " · balance " + b.left_total + " (granted " + (b.granted_total ?? "?") + ")";
+  const g = (b && Array.isArray(b.recent_grants) && b.recent_grants[0]) || null;
+  if (g && typeof g.credits === "number")
+    s += " · last grant +" + g.credits + (g.reason ? " " + g.reason : "");
   return s;
 }
 async function usage(s) {

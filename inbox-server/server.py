@@ -227,7 +227,8 @@ class DB:
                 "pipeline": self.get_pipeline(user_id),
                 "inference": self.get_inference(user_id),
                 "balance": {"granted_total": granted, "spent_total": ctotal,
-                              "left_total": granted - ctotal}}
+                              "left_total": granted - ctotal,
+                              "recent_grants": self.get_grant_history(user_id)}}
 
     def bump_pipeline(self, user_id, likes_n):
         """One pipeline handoff: the analyser will spend inference on these likes."""
@@ -293,6 +294,19 @@ class DB:
         except sqlite3.Error:
             return {"total": 0, "count": 0}
         return {"total": row[0] if row else 0, "count": row[1] if row else 0}
+
+    def get_grant_history(self, user_id, limit=5):
+        """Last grants for this user, newest first: [{day, credits, reason}].
+
+        Read-only view over the grants ledger for the options badge; empty
+        list for unknown users, never an error."""
+        try:
+            rows = self.c.execute(
+                "SELECT day, credits, reason FROM grants WHERE user_id=? "
+                "ORDER BY id DESC LIMIT ?", (user_id, limit)).fetchall()
+        except sqlite3.Error:
+            return []
+        return [{"day": r[0], "credits": r[1], "reason": r[2]} for r in rows]
 
     def quota_left(self, user_id):
         """Billable units the user may still store today. Infinite when not enforcing."""
