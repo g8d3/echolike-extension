@@ -538,6 +538,31 @@ class DB:
         return {a: {k: round(v, 9) for k, v in sorted(cur.items())}
                 for a, cur in sorted(out.items())}
 
+    def list_payouts(self, limit=100):
+        """Off-band payout ledger, newest first, read-only.
+
+        [{at, day, agent, amount, currency, ref}] over the payouts table
+        for the owner (localhost GET /api/payouts): one row per payment
+        the owner recorded after paying a bringer off-band, so the totals'
+        paid{}/payable{} can be checked line by line. ref is '' when the
+        owner recorded no tx hash or note; never an error, unknown state
+        is an empty list. Limit clamped to 1..500, default 100."""
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            limit = 100
+        limit = max(1, min(500, limit))
+        try:
+            rows = self.c.execute(
+                "SELECT at, day, agent, amount, currency, ref "
+                "FROM payouts ORDER BY rowid DESC LIMIT ?",
+                (limit,)).fetchall()
+        except sqlite3.Error:
+            return []
+        return [{"at": r[0], "day": r[1], "agent": r[2],
+                 "amount": r[3], "currency": r[4],
+                 "ref": r[5] or ""} for r in rows]
+
     def list_codes(self, limit=100):
         """Prepaid code inventory, newest first.
 
@@ -891,6 +916,16 @@ def make_handler(db):
                     limit = 100
                 return self._json({"ok": True, "codes": db.list_codes(limit),
                                      "totals": db.get_sales_totals()})
+            if u.path == "/api/payouts":
+                peer = (self.client_address[0] if self.client_address else "")
+                if peer not in ("127.0.0.1", "::1"):
+                    return self._json({"ok": False, "error": "payouts only from this machine"}, 403)
+                q = parse_qs(u.query)
+                try:
+                    limit = max(1, min(500, int(q.get("limit", ["100"])[0])))
+                except ValueError:
+                    limit = 100
+                return self._json({"ok": True, "payouts": db.list_payouts(limit)})
             if u.path == "/" or u.path == "/index.html":
                 items = ""
                 try:
