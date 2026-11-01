@@ -233,7 +233,8 @@ class DB:
                 "balance": {"granted_total": granted, "spent_total": ctotal,
                               "left_total": granted - ctotal,
                               "referred_by": self.get_referrer(user_id),
-                              "recent_grants": self.get_grant_history(user_id)}}
+                              "recent_grants": self.get_grant_history(user_id)},
+                "history": self.get_spend_history(user_id)}
 
     def bump_pipeline(self, user_id, likes_n):
         """One pipeline handoff: the analyser will spend inference on these likes."""
@@ -330,6 +331,36 @@ class DB:
         except sqlite3.Error:
             return []
         return [{"day": r[0], "credits": r[1], "reason": r[2]} for r in rows]
+
+    def get_spend_history(self, user_id, days=7):
+        """Per-day spend off the same cash register, newest first: [{day, spent, granted}].
+
+        No new backend: spent reuses the usage + inference rows with the same
+        prices get_usage() applies; granted sums the grants ledger per day.
+        Days with no activity report zeros so a chart stays stable; unknown
+        users get zeros, never an error. Read-only."""
+        try:
+            days = max(1, min(30, int(days)))
+        except (TypeError, ValueError):
+            days = 7
+        try:
+            from datetime import timedelta
+            base = datetime.now(timezone.utc).date()
+            out = []
+            for i in range(days):
+                d = str(base - timedelta(days=i))
+                u = self.c.execute("SELECT likes_in, inbox_reads FROM usage WHERE day=? AND user_id=?",
+                                   (d, user_id)).fetchone()
+                f = self.c.execute("SELECT calls FROM inference WHERE day=? AND user_id=?",
+                                   (d, user_id)).fetchone()
+                g = self.c.execute("SELECT COALESCE(SUM(credits),0) FROM grants WHERE day=? AND user_id=?",
+                                   (d, user_id)).fetchone()
+                spent = ((u[0] if u else 0) * PRICE_LIKE_IN + (u[1] if u else 0) * PRICE_READ
+                         + (f[0] if f else 0) * PRICE_ANALYSIS)
+                out.append({"day": d, "spent": spent, "granted": g[0] if g else 0})
+            return out
+        except sqlite3.Error:
+            return []
 
     def quota_left(self, user_id):
         """Billable units the user may still store today. Infinite when not enforcing."""
