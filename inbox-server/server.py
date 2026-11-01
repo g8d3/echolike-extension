@@ -576,7 +576,8 @@ class DB:
 
         {codes, redeemed, revoked, outstanding, with_sale, sales:{CUR: total},
         by_referrer:{agent: {CUR: total}}, commission_pct, owed:{agent: {CUR: amount}},
-        paid:{agent: {CUR: total}}, payable:{agent: {CUR: amount}}}.
+        paid:{agent: {CUR: total}}, payable:{agent: {CUR: amount}},
+        timeline:[{day, sales:{CUR: total}, settled}]}.
         Sums every row carrying a sale
         (a revoked code keeps its note: the money arrived, the code was
         killed); free/promo rows count in codes but add nothing. by_referrer
@@ -590,18 +591,24 @@ class DB:
         (localhost POST /api/payout, one row per off-band payment to a
         bringer); payable is owed minus paid per agent and currency, so the
         owner sees what is still due — negative when a bringer was overpaid,
-        honest either way. Totals always cover the
+        honest either way. timeline is the per-day settled revenue over the
+        last 30 days, newest first: one row per day {day, sales:{CUR: total},
+        settled} where day is the redemption day (redeemed_at[:10]), sales
+        sums only REDEEMED codes carrying a sale, settled counts them, and
+        quiet days report sales{} settled 0 so a chart stays stable. Rows
+        with no usable redemption day are ignored there (never an error).
+        Totals always cover the
         whole book, never just the ?limit= window
         of /api/codes. Sums round to 9 decimals (a lamport) so float dust
         never reaches the owner. No new table, never an error, unknown
-        state is all zeros."""
+        state is all zeros (timeline [])."""
         zero = {"codes": 0, "redeemed": 0, "revoked": 0, "outstanding": 0,
                 "with_sale": 0, "sales": {}, "by_referrer": {},
                 "commission_pct": COMMISSION_PCT, "owed": {},
-                "paid": {}, "payable": {}}
+                "paid": {}, "payable": {}, "timeline": []}
         try:
             rows = self.c.execute(
-                "SELECT redeemed_by, revoked, sale_amount, sale_currency "
+                "SELECT redeemed_by, revoked, sale_amount, sale_currency, redeemed_at "
                 "FROM grant_codes").fetchall()
         except sqlite3.Error:
             return zero
@@ -613,7 +620,9 @@ class DB:
         sales = {}
         by_ref = {}
         owed_raw = {}
-        for redeemed_by, revoked, amount, currency in rows:
+        per_day = {}
+        per_day_n = {}
+        for redeemed_by, revoked, amount, currency, redeemed_at in rows:
             zero["codes"] += 1
             if redeemed_by:
                 zero["redeemed"] += 1
@@ -624,6 +633,11 @@ class DB:
             if amount is not None and currency:
                 zero["with_sale"] += 1
                 sales[currency] = sales.get(currency, 0) + float(amount)
+                if redeemed_by and isinstance(redeemed_at, str) and len(redeemed_at) >= 10:
+                    day = redeemed_at[:10]
+                    bucket = per_day.setdefault(day, {})
+                    bucket[currency] = bucket.get(currency, 0) + float(amount)
+                    per_day_n[day] = per_day_n.get(day, 0) + 1
                 agent = refmap.get(redeemed_by) if redeemed_by else None
                 if agent:
                     bucket = by_ref.setdefault(agent, {})
@@ -656,6 +670,11 @@ class DB:
                 payable_raw.setdefault(agent, {})[currency] = due
         zero["payable"] = {a: {k: round(v, 9) for k, v in sorted(cur.items())}
                               for a, cur in sorted(payable_raw.items())}
+        days = [(datetime.now(timezone.utc) - timedelta(days=i)).strftime("%Y-%m-%d")
+                for i in range(30)]
+        zero["timeline"] = [{"day": d,
+                               "sales": {k: round(v, 9) for k, v in sorted(per_day.get(d, {}).items())},
+                               "settled": per_day_n.get(d, 0)} for d in days]
         return zero
 
     def get_referrer(self, user_id):
