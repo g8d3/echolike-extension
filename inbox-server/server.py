@@ -132,6 +132,12 @@ class DB:
         # /api/redeem) into granted credits. Single-use: first redeemer wins.
         # Bookkeeping only: minting and redeeming move no money.
         self.c.execute("CREATE TABLE IF NOT EXISTS grant_codes (code TEXT PRIMARY KEY, credits INTEGER NOT NULL, reason TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, redeemed_by TEXT NOT NULL DEFAULT '', redeemed_at TEXT NOT NULL DEFAULT '')")
+        # Revoked codes: a leaked or unsold code the owner kills before it is
+        # redeemed (localhost POST /api/revoke). Redeeming a revoked code is
+        # refused; the sales book keeps showing it, marked. Added 2026-11-01.
+        gcols = {r[1] for r in self.c.execute("PRAGMA table_info(grant_codes)")}
+        if "revoked" not in gcols:
+            self.c.execute("ALTER TABLE grant_codes ADD COLUMN revoked TEXT NOT NULL DEFAULT ''")
         self.c.commit()
         self._ensure_users()
 
@@ -330,17 +336,20 @@ class DB:
 
         Single-use: the first redeemer wins, a second redeem raises
         LookupError("already redeemed"). Unknown codes raise LookupError,
-        blank codes ValueError. The grant carries the code's stored reason,
+        blank codes ValueError, revoked codes LookupError("revoked"). The
+        grant carries the code's stored reason,
         so the history shows why the credits exist."""
         if not isinstance(user_id, str) or not user_id:
             raise ValueError("user_id must be a non-empty string")
         if not isinstance(code, str) or not code.strip():
             raise ValueError("code must be a non-empty string")
         code = code.strip().upper()
-        row = self.c.execute("SELECT credits, reason, redeemed_by FROM grant_codes WHERE code=?",
+        row = self.c.execute("SELECT credits, reason, redeemed_by, revoked FROM grant_codes WHERE code=?",
                              (code,)).fetchone()
         if not row:
             raise LookupError("unknown code")
+        if row[3]:
+            raise LookupError("revoked")
         if row[2]:
             raise LookupError("already redeemed")
         self.c.execute("INSERT INTO grants (at, day, user_id, credits, reason) VALUES (?,?,?,?,?)",
@@ -350,13 +359,39 @@ class DB:
         self.c.commit()
         return self.get_grants(user_id)["total"]
 
+    def revoke_code(self, code):
+        """Kill an unredeemed prepaid code before it can be spent.
+
+        Localhost only (the HTTP layer enforces it): the owner revokes a
+        leaked or unsold code. Returns the revoke timestamp. Blank codes
+        raise ValueError; unknown codes LookupError; redeemed codes
+        LookupError("already redeemed"); already-revoked codes
+        LookupError("already revoked"). Writes no grant: the ledger is
+        untouched, only the code dies."""
+        if not isinstance(code, str) or not code.strip():
+            raise ValueError("code must be a non-empty string")
+        code = code.strip().upper()
+        row = self.c.execute("SELECT redeemed_by, revoked FROM grant_codes WHERE code=?",
+                             (code,)).fetchone()
+        if not row:
+            raise LookupError("unknown code")
+        if row[0]:
+            raise LookupError("already redeemed")
+        if row[1]:
+            raise LookupError("already revoked")
+        at = utcnow()
+        self.c.execute("UPDATE grant_codes SET revoked=? WHERE code=?", (at, code))
+        self.c.commit()
+        return at
+
     def list_codes(self, limit=100):
         """Prepaid code inventory, newest first.
 
         Read-only view over grant_codes for the owner (localhost GET
         /api/codes): [{code, credits, reason, created_at, redeemed_by,
-        redeemed_at}]. Unredeemed codes report redeemed_by/redeemed_at as
-        None, never an error; unknown state is an empty list. Limit clamped
+        redeemed_at, revoked}]. Unredeemed codes report redeemed_by/
+        redeemed_at as None, live codes report revoked as None; never an
+        error, unknown state is an empty list. Limit clamped
         to 1..500, default 100."""
         try:
             limit = int(limit)
@@ -365,14 +400,14 @@ class DB:
         limit = max(1, min(500, limit))
         try:
             rows = self.c.execute(
-                "SELECT code, credits, reason, created_at, redeemed_by, redeemed_at "
+                "SELECT code, credits, reason, created_at, redeemed_by, redeemed_at, revoked "
                 "FROM grant_codes ORDER BY rowid DESC LIMIT ?",
                 (limit,)).fetchall()
         except sqlite3.Error:
             return []
         return [{"code": r[0], "credits": r[1], "reason": r[2],
                  "created_at": r[3], "redeemed_by": r[4] or None,
-                 "redeemed_at": r[5] or None} for r in rows]
+                 "redeemed_at": r[5] or None, "revoked": r[6] or None} for r in rows]
 
     def get_referrer(self, user_id):
         """The agent id that first brought this user, or None.
@@ -683,12 +718,39 @@ def make_handler(db):
                 return self._json({"ok": False, "error": str(e)}, 400)
             except LookupError as e:
                 msg = str(e)
-                if "already" in msg:
+                if "already" in msg or "revoked" in msg:
                     return self._json({"ok": False, "error": msg}, 409)
                 return self._json({"ok": False, "error": msg}, 404)
             return self._json({"ok": True, "user_id": uid,
                                "granted_total": total,
                                "balance": db.get_usage(uid)["balance"]})
+
+        def _revoke(self):
+            """POST /api/revoke — localhost only: kill an unredeemed code."""
+            peer = (self.client_address[0] if self.client_address else "")
+            if peer not in ("127.0.0.1", "::1"):
+                return self._json({"ok": False, "error": "revoke only from this machine"}, 403)
+            try:
+                n = int(self.headers.get("content-length") or 0)
+            except ValueError:
+                n = 0
+            if n > 1_000_000:
+                return self._json({"ok": False, "error": "too large"}, 413)
+            try:
+                body = json.loads(self.rfile.read(n) or b"{}")
+            except (ValueError, OSError):
+                return self._json({"ok": False, "error": "bad json"}, 400)
+            try:
+                at = db.revoke_code(body.get("code"))
+            except ValueError as e:
+                return self._json({"ok": False, "error": str(e)}, 400)
+            except LookupError as e:
+                msg = str(e)
+                if "already" in msg:
+                    return self._json({"ok": False, "error": msg}, 409)
+                return self._json({"ok": False, "error": msg}, 404)
+            code = str(body.get("code") or "").strip().upper()
+            return self._json({"ok": True, "code": code, "revoked_at": at})
 
         def do_POST(self):
             u = urlparse(self.path)
@@ -700,6 +762,8 @@ def make_handler(db):
                 return self._mint()
             if u.path == "/api/redeem":
                 return self._redeem()
+            if u.path == "/api/revoke":
+                return self._revoke()
             if u.path != "/api/likes":
                 return self._json({"ok": False, "error": "not found"}, 404)
             dev = self._auth()
