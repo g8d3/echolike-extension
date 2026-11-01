@@ -109,6 +109,9 @@ class DB:
         self.c.execute("CREATE TABLE IF NOT EXISTS claims (at TEXT, ip TEXT, device TEXT, ua TEXT)")
         # Credit meter (v1: counts only, charging comes later). One row per user per day.
         self.c.execute("CREATE TABLE IF NOT EXISTS usage (day TEXT NOT NULL, user_id TEXT NOT NULL, likes_in INTEGER NOT NULL DEFAULT 0, inbox_reads INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, user_id))")
+        # Pipeline handoffs: likes per user handed to the analysis pipeline (the
+        # real inference cost driver). Written by operador/inbox_a_pipeline.py.
+        self.c.execute("CREATE TABLE IF NOT EXISTS pipeline (day TEXT NOT NULL, user_id TEXT NOT NULL, handoff_likes INTEGER NOT NULL DEFAULT 0, handoff_runs INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, user_id))")
         self.c.commit()
         self._ensure_users()
 
@@ -206,7 +209,26 @@ class DB:
                               "total": t[0] * PRICE_LIKE_IN + t[1] * PRICE_READ,
                               "prices": {"inbox_write": PRICE_LIKE_IN, "inbox_read": PRICE_READ}},
                 "quota": {"free_daily": FREE_DAILY, "used_today": tin,
-                            "left_today": max(0, FREE_DAILY - tin), "enforcing": ENFORCE_QUOTA}}
+                            "left_today": max(0, FREE_DAILY - tin), "enforcing": ENFORCE_QUOTA},
+                "pipeline": self.get_pipeline(user_id)}
+
+    def bump_pipeline(self, user_id, likes_n):
+        """One pipeline handoff: the analyser will spend inference on these likes."""
+        try:
+            self.c.execute("INSERT INTO pipeline (day, user_id, handoff_likes, handoff_runs) VALUES (?,?,?,1) "
+                           "ON CONFLICT (day, user_id) DO UPDATE SET handoff_likes = handoff_likes + excluded.handoff_likes, "
+                           "handoff_runs = handoff_runs + 1",
+                           (today(), user_id, likes_n))
+            self.c.commit()
+        except sqlite3.Error:
+            pass
+
+    def get_pipeline(self, user_id):
+        day = today()
+        row = self.c.execute("SELECT handoff_likes, handoff_runs FROM pipeline WHERE day=? AND user_id=?", (day, user_id)).fetchone()
+        t = self.c.execute("SELECT COALESCE(SUM(handoff_likes),0), COALESCE(SUM(handoff_runs),0) FROM pipeline WHERE user_id=?", (user_id,)).fetchone()
+        return {"today": {"handoff_likes": row[0] if row else 0, "handoff_runs": row[1] if row else 0},
+                "total": {"handoff_likes": t[0], "handoff_runs": t[1]}}
 
     def quota_left(self, user_id):
         """Billable units the user may still store today. Infinite when not enforcing."""
