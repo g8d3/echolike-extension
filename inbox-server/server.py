@@ -509,22 +509,33 @@ class DB:
     def get_sales_totals(self):
         """Recorded revenue totals over prepaid codes, read-only.
 
-        {codes, redeemed, revoked, outstanding, with_sale, sales:{CUR: total}}.
-        Sums every row carrying a sale (a revoked code keeps its note: the
-        money arrived, the code was killed); free/promo rows count in codes
-        but add nothing. Totals always cover the whole book, never just the
-        ?limit= window of /api/codes. Sums round to 9 decimals (a lamport)
-        so float dust never reaches the owner. No new table, never an error,
-        unknown state is all zeros."""
+        {codes, redeemed, revoked, outstanding, with_sale, sales:{CUR: total},
+        by_referrer:{agent: {CUR: total}}}. Sums every row carrying a sale
+        (a revoked code keeps its note: the money arrived, the code was
+        killed); free/promo rows count in codes but add nothing. by_referrer
+        is the settled commission base: only REDEEMED codes whose redeemer
+        carries a first-touch referrer stamp count, so the owner sees what
+        each bringer's clients actually paid and settled. Unredeemed,
+        revoked and unstamped rows stay in sales but never in by_referrer.
+        Totals always cover the whole book, never just the ?limit= window
+        of /api/codes. Sums round to 9 decimals (a lamport) so float dust
+        never reaches the owner. No new table, never an error, unknown
+        state is all zeros."""
         zero = {"codes": 0, "redeemed": 0, "revoked": 0, "outstanding": 0,
-                "with_sale": 0, "sales": {}}
+                "with_sale": 0, "sales": {}, "by_referrer": {}}
         try:
             rows = self.c.execute(
                 "SELECT redeemed_by, revoked, sale_amount, sale_currency "
                 "FROM grant_codes").fetchall()
         except sqlite3.Error:
             return zero
+        try:
+            refmap = {r[0]: r[1] for r in self.c.execute(
+                "SELECT user_id, referred_by FROM referrals").fetchall()}
+        except sqlite3.Error:
+            refmap = {}
         sales = {}
+        by_ref = {}
         for redeemed_by, revoked, amount, currency in rows:
             zero["codes"] += 1
             if redeemed_by:
@@ -536,7 +547,13 @@ class DB:
             if amount is not None and currency:
                 zero["with_sale"] += 1
                 sales[currency] = sales.get(currency, 0) + float(amount)
+                agent = refmap.get(redeemed_by) if redeemed_by else None
+                if agent:
+                    bucket = by_ref.setdefault(agent, {})
+                    bucket[currency] = bucket.get(currency, 0) + float(amount)
         zero["sales"] = {k: round(v, 9) for k, v in sorted(sales.items())}
+        zero["by_referrer"] = {a: {k: round(v, 9) for k, v in sorted(cur.items())}
+                                 for a, cur in sorted(by_ref.items())}
         return zero
 
     def get_referrer(self, user_id):
