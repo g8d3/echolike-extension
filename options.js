@@ -33,6 +33,26 @@ async function usage(s) {
     el.textContent = usageText(u);
   } catch (e) { /* offline inbox: line stays empty, nothing breaks */ }
 }
+function payText(c) {
+  const sol = (c && c.sol) || "", evm = (c && c.evm) || "";
+  if (sol && evm) return "Top up: SOL " + sol + " \u00b7 EVM " + evm;
+  if (sol) return "Top up: SOL " + sol;
+  if (evm) return "Top up: EVM " + evm;
+  return "";
+}
+async function pay(s) {
+  const el = $("msgPay");
+  if (!el) return;
+  el.textContent = "";
+  if (!s.inbox_url) return;
+  try {
+    const r = await fetch(s.inbox_url.replace(/\/$/, "") + "/api/health", { cache: "no-store" });
+    if (!r.ok) return;
+    const h = await r.json();
+    if (!h || !h.ok) return;
+    el.textContent = payText(h.checkout);
+  } catch (e) { /* offline inbox: line stays empty, nothing breaks */ }
+}
 async function redeem() {
   const codeEl = $("redeem_code"), msgEl = $("msgRedeem");
   const code = ((codeEl && codeEl.value) || "").trim();
@@ -67,6 +87,7 @@ async function pintar() {
   $("ver").textContent = ext.runtime.getManifest().version;
   const s = await ext.storage.local.get({ sync: false, datos: [], transport: "direct", inbox_url: "", device_token: "" });
   usage(s);
+  pay(s);
   const box = $("boxRedeem");
   if (box) box.style.display = (s.inbox_url && s.device_token) ? "" : "none";
   $("sync").checked = !!s.sync;
