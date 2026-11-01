@@ -8,7 +8,12 @@
       "name": "This PC (same machine)",
       "url": "http://127.0.0.1:8911",
       "api": 2,
-      "price": { "model": "free" },
+      "price": {
+        "model": "free",
+        "quota_day": 2000,
+        "unit": "inbox_write",
+        "enforcing": false
+      },
       "region": "local",
       "claim": "private",
       "health": "/api/health",

@@ -34,6 +34,13 @@ from urllib.parse import urlparse, parse_qs
 
 DAILY_CAP = 2000
 MAX_DEVICES = int(os.environ.get("ECHO_MAX_DEVICES", "10"))
+# Pricing (demo mode): the meter prices every action, but nothing is enforced
+# until ECHO_ENFORCE_QUOTA=1. Prices are integer credit-units; the extension
+# shows them before writing (see /api/health prices). Charging comes later.
+PRICE_LIKE_IN = int(os.environ.get("ECHO_PRICE_LIKE_IN", "1"))
+PRICE_READ = int(os.environ.get("ECHO_PRICE_READ", "0"))
+FREE_DAILY = int(os.environ.get("ECHO_FREE_DAILY", "2000"))
+ENFORCE_QUOTA = os.environ.get("ECHO_ENFORCE_QUOTA") == "1"
 # The producer knows when a row is durable, so it tells the analysis pipeline instead of
 # a file watcher guessing: the kernel event can arrive before sqlite commits.
 INGEST_CMD = os.environ.get("ECHO_INGEST_CMD",
@@ -191,9 +198,22 @@ class DB:
         t = self.c.execute("SELECT COALESCE(SUM(likes_in),0), COALESCE(SUM(inbox_reads),0) FROM usage WHERE user_id=?", (user_id,)).fetchone()
         likes_total = self.c.execute("SELECT COUNT(*) FROM likes WHERE device IN (SELECT id FROM devices WHERE user_id=?)",
                                      (user_id,)).fetchone()[0]
+        tin, trd = (row[0] if row else 0), (row[1] if row else 0)
         return {"user_id": user_id, "day": day,
-                "today": {"likes_in": row[0] if row else 0, "inbox_reads": row[1] if row else 0},
-                "total": {"likes_in": t[0], "inbox_reads": t[1], "likes_stored": likes_total}}
+                "today": {"likes_in": tin, "inbox_reads": trd},
+                "total": {"likes_in": t[0], "inbox_reads": t[1], "likes_stored": likes_total},
+                "credits": {"today": tin * PRICE_LIKE_IN + trd * PRICE_READ,
+                              "total": t[0] * PRICE_LIKE_IN + t[1] * PRICE_READ,
+                              "prices": {"inbox_write": PRICE_LIKE_IN, "inbox_read": PRICE_READ}},
+                "quota": {"free_daily": FREE_DAILY, "used_today": tin,
+                            "left_today": max(0, FREE_DAILY - tin), "enforcing": ENFORCE_QUOTA}}
+
+    def quota_left(self, user_id):
+        """Billable units the user may still store today. Infinite when not enforcing."""
+        if not ENFORCE_QUOTA:
+            return None
+        row = self.c.execute("SELECT likes_in FROM usage WHERE day=? AND user_id=?", (today(), user_id)).fetchone()
+        return max(0, FREE_DAILY - (row[0] if row else 0))
 
     def notify_pipeline(self):
         """Fire-and-forget: the ingest script is idempotent, so a double call is harmless."""
@@ -300,7 +320,9 @@ def make_handler(db):
                 return self._json({"ok": True, "time": utcnow(), "now_ms": int(_time.time() * 1000), "api": 2,
                                    "claim": "open" if OPEN_CLAIM else "private",
                                    "devices": db.device_count(), "users": db.user_count(),
-                                   "multi_tenant": True})
+                                   "multi_tenant": True,
+                                   "prices": {"inbox_write": PRICE_LIKE_IN, "inbox_read": PRICE_READ,
+                                               "free_daily": FREE_DAILY, "enforcing": ENFORCE_QUOTA}})
             if u.path == "/api/me":
                 dev, uid = self._identity()
                 if not dev:
@@ -374,6 +396,11 @@ def make_handler(db):
                 return self._json({"ok": False, "error": "items must be a list"}, 400)
             if not db.check_cap(dev, len(items)):
                 return self._json({"ok": False, "error": "daily cap"}, 429)
+            left = db.quota_left(db.user_of_device(dev))
+            if left is not None and len(items) > left:
+                return self._json({"ok": False, "error": "quota_exceeded",
+                                   "hint": "free daily quota spent; demo-only, raise ECHO_FREE_DAILY or unset ECHO_ENFORCE_QUOTA",
+                                   "quota": {"free_daily": FREE_DAILY, "left_today": left}}, 429)
             post_ms = body.get("post_ms") if isinstance(body.get("post_ms"), (int, float)) else None
             return self._json({"ok": True, "received": db.store(dev, items, self.headers.get("user-agent") or "",
                                                                 self.headers.get("x-forwarded-for") or self.client_address[0],
