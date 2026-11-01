@@ -54,6 +54,17 @@ CLAIM_PER_IP_HOUR = int(os.environ.get("ECHO_CLAIM_PER_HOUR", "3"))
 # code by hand after seeing the payment off-band.
 CHECKOUT_SOL = os.environ.get("ECHO_SOL_ADDRESS", "").strip()
 CHECKOUT_EVM = os.environ.get("ECHO_EVM_ADDRESS", "").strip()
+# Referrer commission rate (report-only): percent of each settled sale owed to
+# the agent who brought the buyer, from ECHO_COMMISSION_PCT (0..100). Unset,
+# blank or out-of-range means no program: totals carry commission_pct None
+# and owed {}. Reporting only: no payout moves here, the owner pays off-band.
+COMMISSION_PCT = None
+try:
+    _pct = float(os.environ.get("ECHO_COMMISSION_PCT", "").strip())
+    if 0 <= _pct <= 100 and _pct == _pct:  # NaN never equals itself
+        COMMISSION_PCT = _pct
+except (ValueError, TypeError, AttributeError):
+    COMMISSION_PCT = None
 OWNER_USER = "u_owner"
 
 
@@ -510,19 +521,24 @@ class DB:
         """Recorded revenue totals over prepaid codes, read-only.
 
         {codes, redeemed, revoked, outstanding, with_sale, sales:{CUR: total},
-        by_referrer:{agent: {CUR: total}}}. Sums every row carrying a sale
+        by_referrer:{agent: {CUR: total}}, commission_pct, owed:{agent: {CUR: amount}}}.
+        Sums every row carrying a sale
         (a revoked code keeps its note: the money arrived, the code was
         killed); free/promo rows count in codes but add nothing. by_referrer
         is the settled commission base: only REDEEMED codes whose redeemer
         carries a first-touch referrer stamp count, so the owner sees what
         each bringer's clients actually paid and settled. Unredeemed,
         revoked and unstamped rows stay in sales but never in by_referrer.
-        Totals always cover the whole book, never just the ?limit= window
+        owed applies the ECHO_COMMISSION_PCT rate to that settled base
+        (report-only: the owner pays off-band); with no rate set
+        commission_pct is None and owed is {}. Totals always cover the
+        whole book, never just the ?limit= window
         of /api/codes. Sums round to 9 decimals (a lamport) so float dust
         never reaches the owner. No new table, never an error, unknown
         state is all zeros."""
         zero = {"codes": 0, "redeemed": 0, "revoked": 0, "outstanding": 0,
-                "with_sale": 0, "sales": {}, "by_referrer": {}}
+                "with_sale": 0, "sales": {}, "by_referrer": {},
+                "commission_pct": COMMISSION_PCT, "owed": {}}
         try:
             rows = self.c.execute(
                 "SELECT redeemed_by, revoked, sale_amount, sale_currency "
@@ -536,6 +552,7 @@ class DB:
             refmap = {}
         sales = {}
         by_ref = {}
+        owed_raw = {}
         for redeemed_by, revoked, amount, currency in rows:
             zero["codes"] += 1
             if redeemed_by:
@@ -551,9 +568,14 @@ class DB:
                 if agent:
                     bucket = by_ref.setdefault(agent, {})
                     bucket[currency] = bucket.get(currency, 0) + float(amount)
+                    if COMMISSION_PCT is not None:
+                        ob = owed_raw.setdefault(agent, {})
+                        ob[currency] = (ob.get(currency, 0) + float(amount) * COMMISSION_PCT / 100)
         zero["sales"] = {k: round(v, 9) for k, v in sorted(sales.items())}
         zero["by_referrer"] = {a: {k: round(v, 9) for k, v in sorted(cur.items())}
                                  for a, cur in sorted(by_ref.items())}
+        zero["owed"] = {a: {k: round(v, 9) for k, v in sorted(cur.items())}
+                            for a, cur in sorted(owed_raw.items())}
         return zero
 
     def get_referrer(self, user_id):
