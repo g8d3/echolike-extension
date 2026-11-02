@@ -670,6 +670,142 @@ class DB:
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
+    @staticmethod
+    def _norm_month(month):
+        """A close month YYYY-MM, or None when malformed.
+
+        Blank or missing means the current UTC month (the owner's most
+        likely question: 'how did this month close?'). Anything else must
+        be exactly YYYY-MM with a real month 01..12, otherwise None so the
+        HTTP layer can refuse it with 400. Pure string checks, no import."""
+        if month is None or (isinstance(month, str) and not month.strip()):
+            return today()[:7]
+        s = month.strip() if isinstance(month, str) else ""
+        if (len(s) == 7 and s[4] == "-" and s[:4].isdigit()
+                and s[5:].isdigit() and "0000" < s[:4] <= "9999"
+                and 1 <= int(s[5:]) <= 12):
+            return s
+        return None
+
+    def get_month_close(self, month=None):
+        """One month's close per bringer, read-only.
+
+        {month, commission_pct, rows:[{agent, currency, settled, owed,
+        paid, payable, settled_n, payouts_n}]} for the owner (localhost
+        GET /api/close?month=YYYY-MM): the month-end reckoning in one
+        read. settled sums REDEEMED prepaid codes carrying a recorded sale
+        whose redeemer carries a first-touch referrer stamp (the same
+        commission base as get_sales_totals().by_referrer), cut to codes
+        redeemed that month (redeemed_at[:7]); settled_n counts them. paid
+        sums the payouts table recorded that month (day[:7]); payouts_n
+        counts them. owed applies ECHO_COMMISSION_PCT to the settled base
+        (report-only: the owner pays off-band); with no rate set owed and
+        payable are None and commission_pct is None. payable is owed minus
+        paid per agent and currency, so the owner sees what is still due —
+        negative when a bringer was overpaid, honest either way. One row
+        per agent and currency over the union of that month's settled and
+        paid agents (a bringer paid with no settlement that month, or
+        settling with no payout yet, still shows). Sorted by agent, then
+        currency; sums round to 9 decimals (a lamport). No new table,
+        never an error, unknown months report []. ValueError on a
+        malformed month (the route answers 400); blank/None means the
+        current UTC month."""
+        m = self._norm_month(month)
+        if m is None:
+            raise ValueError("month must be YYYY-MM")
+        empty = {"month": m, "commission_pct": COMMISSION_PCT, "rows": []}
+        try:
+            rows = self.c.execute(
+                "SELECT redeemed_by, sale_amount, sale_currency, redeemed_at "
+                "FROM grant_codes").fetchall()
+        except sqlite3.Error:
+            return empty
+        try:
+            refmap = {r[0]: r[1] for r in self.c.execute(
+                "SELECT user_id, referred_by FROM referrals").fetchall()}
+        except sqlite3.Error:
+            refmap = {}
+        try:
+            prows = self.c.execute(
+                "SELECT agent, currency, amount, day FROM payouts").fetchall()
+        except sqlite3.Error:
+            prows = []
+        settled = {}
+        settled_n = {}
+        for redeemed_by, amount, currency, redeemed_at in rows:
+            if not redeemed_by or amount is None or not currency:
+                continue
+            if not isinstance(redeemed_at, str) or redeemed_at[:7] != m:
+                continue
+            agent = refmap.get(redeemed_by)
+            if not agent:
+                continue
+            key = (agent, currency)
+            settled[key] = settled.get(key, 0) + float(amount)
+            settled_n[key] = settled_n.get(key, 0) + 1
+        paid = {}
+        paid_n = {}
+        for agent, currency, amount, day in prows:
+            if not agent or not currency:
+                continue
+            if not isinstance(day, str) or day[:7] != m:
+                continue
+            key = (agent, currency)
+            paid[key] = paid.get(key, 0) + float(amount)
+            paid_n[key] = paid_n.get(key, 0) + 1
+        out = []
+        for key in sorted(set(settled) | set(paid)):
+            agent, currency = key
+            st = round(settled.get(key, 0), 9)
+            pd = round(paid.get(key, 0), 9)
+            if COMMISSION_PCT is None:
+                owed = None
+                payable = None
+            else:
+                owed = round(settled.get(key, 0) * COMMISSION_PCT / 100, 9)
+                payable = round(owed - paid.get(key, 0), 9)
+            out.append({"agent": agent, "currency": currency,
+                          "settled": st, "owed": owed,
+                          "paid": pd, "payable": payable,
+                          "settled_n": settled_n.get(key, 0),
+                          "payouts_n": paid_n.get(key, 0)})
+        empty["rows"] = out
+        return empty
+
+    def close_csv(self, month=None):
+        """One month's close as CSV, one row per bringer and currency.
+
+        One header row plus one row per (agent, currency) for the owner
+        (localhost GET /api/close.csv?month=YYYY-MM):
+        month,agent,currency,settled,owed,paid,payable,settled_n,payouts_n,
+        commission_pct — the same rows get_month_close() reports, so the
+        month-end reckoning reconciles in a spreadsheet without touching
+        JSON. None renders as an empty cell (no commission rate means owed
+        and payable stay blank instead of lying with zeros), values are
+        csv-quoted as needed. Unknown months render header only, never an
+        error; a malformed month raises ValueError (the HTTP layer answers
+        400), blank/None means the current UTC month. New export only:
+        get_sales_totals, list_payouts, /api/codes, /api/payouts,
+        /api/statement, /api/usage, badge, history and health shapes
+        untouched."""
+        cols = ("month", "agent", "currency", "settled", "owed",
+                "paid", "payable", "settled_n", "payouts_n",
+                "commission_pct")
+        buf = io.StringIO(newline="")
+        w = csv.writer(buf)
+        w.writerow(cols)
+        close = self.get_month_close(month)
+        for row in close["rows"]:
+            w.writerow([close["month"], row["agent"], row["currency"],
+                          row["settled"],
+                          "" if row["owed"] is None else row["owed"],
+                          row["paid"],
+                          "" if row["payable"] is None else row["payable"],
+                          row["settled_n"], row["payouts_n"],
+                          "" if close["commission_pct"] is None
+                          else close["commission_pct"]])
+        return buf.getvalue()
+
     def list_codes(self, limit=100):
         """Prepaid code inventory, newest first.
 
@@ -1141,6 +1277,33 @@ def make_handler(db):
                 if not want:
                     return self._json({"ok": False, "error": "agent required"}, 400)
                 b = db.statement_csv(want, limit).encode()
+                self.send_response(200)
+                self.send_header("content-type", "text/csv; charset=utf-8")
+                self.send_header("content-length", str(len(b)))
+                self.end_headers()
+                self.wfile.write(b)
+                return
+            if u.path == "/api/close":
+                peer = (self.client_address[0] if self.client_address else "")
+                if peer not in ("127.0.0.1", "::1"):
+                    return self._json({"ok": False, "error": "close only from this machine"}, 403)
+                q = parse_qs(u.query)
+                month = q.get("month", [None])[0]
+                try:
+                    close = db.get_month_close(month)
+                except ValueError as e:
+                    return self._json({"ok": False, "error": str(e)}, 400)
+                return self._json({"ok": True, **close})
+            if u.path == "/api/close.csv":
+                peer = (self.client_address[0] if self.client_address else "")
+                if peer not in ("127.0.0.1", "::1"):
+                    return self._json({"ok": False, "error": "close only from this machine"}, 403)
+                q = parse_qs(u.query)
+                month = q.get("month", [None])[0]
+                try:
+                    b = db.close_csv(month).encode()
+                except ValueError as e:
+                    return self._json({"ok": False, "error": str(e)}, 400)
                 self.send_response(200)
                 self.send_header("content-type", "text/csv; charset=utf-8")
                 self.send_header("content-length", str(len(b)))
