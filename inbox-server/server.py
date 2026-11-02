@@ -1099,6 +1099,29 @@ class DB:
         return [{"at": r[0], "day": r[1], "user_id": r[2],
                  "credits": r[3], "reason": r[4] or ""} for r in rows]
 
+    def grants_csv(self, limit=100, user=None):
+        """Manual-grant ledger as CSV, newest first (same rows as list_grants).
+
+        One header row plus one row per manual grant for the owner
+        (localhost GET /api/grants.csv): at,day,user_id,credits,reason —
+        the same rows list_grants() reports, so the funding side of the
+        cash register reconciles in a spreadsheet without touching JSON.
+        Redeemed prepaid codes appear here too (same table, mint reason).
+        None renders as an empty cell, values are csv-quoted as needed.
+        user is the same optional exact-match filter as list_grants
+        (None/blank = every user, unknown users header only, never an
+        error). Limit clamped 1..500, default 100. New export only:
+        list_grants, /api/grants, grant recording, redeem, /api/usage,
+        badge, history, codes, sales totals, payouts, statement, close
+        and health shapes untouched."""
+        cols = ("at", "day", "user_id", "credits", "reason")
+        buf = io.StringIO(newline="")
+        w = csv.writer(buf)
+        w.writerow(cols)
+        for row in self.list_grants(limit, user):
+            w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
+        return buf.getvalue()
+
     def get_spend_history(self, user_id, days=7):
         """Per-day spend off the same cash register, newest first: [{day, spent, granted}].
 
@@ -1343,6 +1366,24 @@ def make_handler(db):
                 want = user.strip() if isinstance(user, str) and user.strip() else None
                 return self._json({"ok": True, "user": want,
                                      "grants": db.list_grants(limit, want)})
+            if u.path == "/api/grants.csv":
+                peer = (self.client_address[0] if self.client_address else "")
+                if peer not in ("127.0.0.1", "::1"):
+                    return self._json({"ok": False, "error": "grants only from this machine"}, 403)
+                q = parse_qs(u.query)
+                try:
+                    limit = max(1, min(500, int(q.get("limit", ["100"])[0])))
+                except ValueError:
+                    limit = 100
+                user = q.get("user", [None])[0]
+                want = user.strip() if isinstance(user, str) and user.strip() else None
+                b = db.grants_csv(limit, want).encode()
+                self.send_response(200)
+                self.send_header("content-type", "text/csv; charset=utf-8")
+                self.send_header("content-length", str(len(b)))
+                self.end_headers()
+                self.wfile.write(b)
+                return
             if u.path == "/api/statement":
                 peer = (self.client_address[0] if self.client_address else "")
                 if peer not in ("127.0.0.1", "::1"):
