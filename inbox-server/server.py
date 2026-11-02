@@ -1206,7 +1206,7 @@ class DB:
             return []
         return [{"day": r[0], "credits": r[1], "reason": r[2]} for r in rows]
 
-    def list_grants(self, limit=100, user=None):
+    def list_grants(self, limit=100, user=None, month=None):
         """Manual-grant ledger for the owner, newest first, read-only.
 
         [{at, day, user_id, credits, reason}] over the grants table for the
@@ -1219,30 +1219,47 @@ class DB:
         list. Limit clamped to 1..500, default 100. user is an optional
         exact-match filter (localhost GET /api/grants?user=X answers 'what
         did I give this user?' without grepping the full list); None or blank
-        means every user, unknown users report []."""
+        means every user, unknown users report []. month is an optional
+        grant-month filter on day in YYYY-MM (localhost GET
+        /api/grants?month=X answers 'what did I grant this month' next to
+        the per-month /api/close reckoning); None, blank or 'all' means
+        every month, a malformed month raises ValueError (the route answers
+        400, same vocabulary as /api/close, /api/codes?month= and
+        /api/payouts?month=). user and month combine (AND)."""
         try:
             limit = int(limit)
         except (TypeError, ValueError):
             limit = 100
         limit = max(1, min(500, limit))
         want = user.strip() if isinstance(user, str) else ""
+        m = None
+        if isinstance(month, str) and month.strip().lower() == "all":
+            month = None
+        if month is not None and (not isinstance(month, str) or month.strip()):
+            m = self._norm_month(month)
+            if m is None:
+                raise ValueError("month must be YYYY-MM")
         try:
+            conds = []
+            params = []
             if want:
-                rows = self.c.execute(
-                    "SELECT at, day, user_id, credits, reason "
-                    "FROM grants WHERE user_id=? ORDER BY id DESC LIMIT ?",
-                    (want, limit)).fetchall()
-            else:
-                rows = self.c.execute(
-                    "SELECT at, day, user_id, credits, reason "
-                    "FROM grants ORDER BY id DESC LIMIT ?",
-                    (limit,)).fetchall()
+                conds.append("user_id=?")
+                params.append(want)
+            if m:
+                conds.append("substr(day,1,7)=?")
+                params.append(m)
+            where = ("WHERE " + " AND ".join(conds)) if conds else ""
+            params.append(limit)
+            rows = self.c.execute(
+                "SELECT at, day, user_id, credits, reason "
+                "FROM grants " + where + " ORDER BY id DESC LIMIT ?",
+                tuple(params)).fetchall()
         except sqlite3.Error:
             return []
         return [{"at": r[0], "day": r[1], "user_id": r[2],
                  "credits": r[3], "reason": r[4] or ""} for r in rows]
 
-    def grants_csv(self, limit=100, user=None):
+    def grants_csv(self, limit=100, user=None, month=None):
         """Manual-grant ledger as CSV, newest first (same rows as list_grants).
 
         One header row plus one row per manual grant for the owner
@@ -1253,7 +1270,9 @@ class DB:
         None renders as an empty cell, values are csv-quoted as needed.
         user is the same optional exact-match filter as list_grants
         (None/blank = every user, unknown users header only, never an
-        error). Limit clamped 1..500, default 100. New export only:
+        error) and month the same optional grant-month filter in YYYY-MM
+        (None/blank/'all' = every month, malformed raises ValueError for
+        a 400). Limit clamped 1..500, default 100. New export only:
         list_grants, /api/grants, grant recording, redeem, /api/usage,
         badge, history, codes, sales totals, payouts, statement, close
         and health shapes untouched."""
@@ -1261,32 +1280,46 @@ class DB:
         buf = io.StringIO(newline="")
         w = csv.writer(buf)
         w.writerow(cols)
-        for row in self.list_grants(limit, user):
+        for row in self.list_grants(limit, user, month):
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
-    def get_grant_totals(self, user=None):
+    def get_grant_totals(self, user=None, month=None):
         """Granted-credit totals over the same filter as list_grants().
 
         {grants, credits}: how many manual grants and how many credits they
         carry for the owner (localhost GET /api/grants serves it as totals
         next to the rows, so the total granted liability reads in one call
         without summing rows). user is the same optional exact-match filter
-        (None/blank = every user, unknown users report zeros). Totals cover
+        (None/blank = every user, unknown users report zeros) and month the
+        same optional grant-month filter in YYYY-MM on day (None/blank/'all'
+        = every month, malformed raises ValueError for a 400). Totals cover
         the whole filter, never just the ?limit= window of the row list.
         Read-only, never an error, unknown state is all zeros. New totals
         only: list_grants, grants_csv, grant recording, redeem, /api/usage,
         badge, history, codes, sales totals, payouts, statement, close
         and health shapes untouched."""
         want = user.strip() if isinstance(user, str) else ""
+        m = None
+        if isinstance(month, str) and month.strip().lower() == "all":
+            month = None
+        if month is not None and (not isinstance(month, str) or month.strip()):
+            m = self._norm_month(month)
+            if m is None:
+                raise ValueError("month must be YYYY-MM")
         try:
+            conds = []
+            params = []
             if want:
-                row = self.c.execute(
-                    "SELECT COUNT(*), COALESCE(SUM(credits),0) FROM grants "
-                    "WHERE user_id=?", (want,)).fetchone()
-            else:
-                row = self.c.execute(
-                    "SELECT COUNT(*), COALESCE(SUM(credits),0) FROM grants").fetchone()
+                conds.append("user_id=?")
+                params.append(want)
+            if m:
+                conds.append("substr(day,1,7)=?")
+                params.append(m)
+            where = ("WHERE " + " AND ".join(conds)) if conds else ""
+            row = self.c.execute(
+                "SELECT COUNT(*), COALESCE(SUM(credits),0) FROM grants "
+                + where, tuple(params)).fetchone()
         except sqlite3.Error:
             return {"grants": 0, "credits": 0}
         return {"grants": row[0] if row else 0, "credits": row[1] if row else 0}
@@ -1579,9 +1612,20 @@ def make_handler(db):
                     limit = 100
                 user = q.get("user", [None])[0]
                 want = user.strip() if isinstance(user, str) and user.strip() else None
-                return self._json({"ok": True, "user": want,
-                                     "grants": db.list_grants(limit, want),
-                                     "totals": db.get_grant_totals(want)})
+                month = q.get("month", [None])[0]
+                try:
+                    rows = db.list_grants(limit, want, month)
+                    totals = db.get_grant_totals(want, month)
+                except ValueError as e:
+                    return self._json({"ok": False, "error": str(e)}, 400)
+                mon = month.strip() if isinstance(month, str) and month.strip() else None
+                if isinstance(mon, str) and mon.lower() == "all":
+                    mon = None
+                if mon is not None:
+                    mon = db._norm_month(mon)
+                return self._json({"ok": True, "user": want, "month": mon,
+                                     "grants": rows,
+                                     "totals": totals})
             if u.path == "/api/grants.csv":
                 peer = (self.client_address[0] if self.client_address else "")
                 if peer not in ("127.0.0.1", "::1"):
@@ -1593,7 +1637,11 @@ def make_handler(db):
                     limit = 100
                 user = q.get("user", [None])[0]
                 want = user.strip() if isinstance(user, str) and user.strip() else None
-                b = db.grants_csv(limit, want).encode()
+                month = q.get("month", [None])[0]
+                try:
+                    b = db.grants_csv(limit, want, month).encode()
+                except ValueError as e:
+                    return self._json({"ok": False, "error": str(e)}, 400)
                 self.send_response(200)
                 self.send_header("content-type", "text/csv; charset=utf-8")
                 self.send_header("content-length", str(len(b)))
