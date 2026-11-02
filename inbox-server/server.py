@@ -594,7 +594,7 @@ class DB:
         return {a: {k: round(v, 9) for k, v in sorted(cur.items())}
                 for a, cur in sorted(out.items())}
 
-    def list_payouts(self, limit=100, agent=None):
+    def list_payouts(self, limit=100, agent=None, month=None):
         """Off-band payout ledger, newest first, read-only.
 
         [{at, day, agent, amount, currency, ref}] over the payouts table
@@ -605,57 +605,86 @@ class DB:
         is an empty list. Limit clamped to 1..500, default 100. agent is
         an optional exact-match filter (localhost GET /api/payouts?agent=X
         answers 'did I already pay this bringer?' without grepping the full
-        list); None or blank means every bringer, unknown agents report []."""
+        list); None or blank means every bringer, unknown agents report [].
+        month is an optional pay-month filter in YYYY-MM on day
+        (localhost GET /api/payouts?month=X answers 'what did I pay out
+        this month' next to the per-month /api/close reckoning); None,
+        blank or 'all' means every month, a malformed month raises
+        ValueError (the route answers 400, same vocabulary as /api/close
+        and /api/codes?month=). agent and month combine (AND)."""
         try:
             limit = int(limit)
         except (TypeError, ValueError):
             limit = 100
         limit = max(1, min(500, limit))
         want = agent.strip() if isinstance(agent, str) else ""
+        m = None
+        if isinstance(month, str) and month.strip().lower() == "all":
+            month = None
+        if month is not None and (not isinstance(month, str) or month.strip()):
+            m = self._norm_month(month)
+            if m is None:
+                raise ValueError("month must be YYYY-MM")
         try:
+            conds = []
+            params = []
             if want:
-                rows = self.c.execute(
-                    "SELECT at, day, agent, amount, currency, ref "
-                    "FROM payouts WHERE agent=? ORDER BY rowid DESC LIMIT ?",
-                    (want, limit)).fetchall()
-            else:
-                rows = self.c.execute(
-                    "SELECT at, day, agent, amount, currency, ref "
-                    "FROM payouts ORDER BY rowid DESC LIMIT ?",
-                    (limit,)).fetchall()
+                conds.append("agent=?")
+                params.append(want)
+            if m:
+                conds.append("substr(day,1,7)=?")
+                params.append(m)
+            where = ("WHERE " + " AND ".join(conds)) if conds else ""
+            params.append(limit)
+            rows = self.c.execute(
+                "SELECT at, day, agent, amount, currency, ref "
+                "FROM payouts " + where + " ORDER BY rowid DESC LIMIT ?",
+                tuple(params)).fetchall()
         except sqlite3.Error:
             return []
         return [{"at": r[0], "day": r[1], "agent": r[2],
                  "amount": r[3], "currency": r[4],
                  "ref": r[5] or ""} for r in rows]
 
-    def get_payout_totals(self, agent=None):
+    def get_payout_totals(self, agent=None, month=None):
         """Paid-out totals over the same filter as list_payouts().
 
         {payouts, paid}: how many off-band payments the owner recorded and
         how much they carry per currency (localhost GET /api/payouts serves
         it as totals next to the rows, so the total paid out reads in one
         call without summing rows). agent is the same optional exact-match
-        filter (None/blank = every bringer, unknown bringers report zeros).
-        Totals cover the whole filter, never just the ?limit= window of the
-        row list. Sums round to 9 decimals (a lamport). Read-only, never an
-        error (a book without the payouts table reads as none). New totals
-        only: list_payouts, payouts_csv, /api/payouts rows, /api/codes,
-        /api/usage, badge, history, codes, sales totals, statement rows,
-        and health shapes untouched."""
+        filter (None/blank = every bringer, unknown bringers report zeros)
+        and month the same optional pay-month filter in YYYY-MM on day
+        (None/blank/'all' = every month, malformed raises ValueError for
+        a 400). Totals cover the whole filter, never just the ?limit=
+        window of the row list. Sums round to 9 decimals (a lamport).
+        Read-only, never an error (a book without the payouts table reads
+        as none). New totals only: list_payouts, payouts_csv, /api/payouts
+        rows, /api/codes, /api/usage, badge, history, codes, sales totals,
+        statement rows, and health shapes untouched."""
         want = agent.strip() if isinstance(agent, str) else ""
+        m = None
+        if isinstance(month, str) and month.strip().lower() == "all":
+            month = None
+        if month is not None and (not isinstance(month, str) or month.strip()):
+            m = self._norm_month(month)
+            if m is None:
+                raise ValueError("month must be YYYY-MM")
         try:
+            conds = []
+            params = []
             if want:
-                n = self.c.execute("SELECT COUNT(*) FROM payouts WHERE agent=?",
-                                   (want,)).fetchone()
-                rows = self.c.execute(
-                    "SELECT currency, COALESCE(SUM(amount),0) FROM payouts "
-                    "WHERE agent=? GROUP BY currency", (want,)).fetchall()
-            else:
-                n = self.c.execute("SELECT COUNT(*) FROM payouts").fetchone()
-                rows = self.c.execute(
-                    "SELECT currency, COALESCE(SUM(amount),0) FROM payouts "
-                    "GROUP BY currency").fetchall()
+                conds.append("agent=?")
+                params.append(want)
+            if m:
+                conds.append("substr(day,1,7)=?")
+                params.append(m)
+            where = ("WHERE " + " AND ".join(conds)) if conds else ""
+            n = self.c.execute("SELECT COUNT(*) FROM payouts " + where,
+                               tuple(params)).fetchone()
+            rows = self.c.execute(
+                "SELECT currency, COALESCE(SUM(amount),0) FROM payouts "
+                + where + " GROUP BY currency", tuple(params)).fetchall()
         except sqlite3.Error:
             return {"payouts": 0, "paid": {}}
         return {"payouts": n[0] if n else 0,
@@ -698,7 +727,7 @@ class DB:
                 "payouts": self.list_payouts(limit, want),
                 "totals": self.get_payout_totals(want)}
 
-    def payouts_csv(self, limit=100, agent=None):
+    def payouts_csv(self, limit=100, agent=None, month=None):
         """Payout ledger as CSV, newest first (same rows as list_payouts).
 
         One header row plus one row per payment for the owner (localhost
@@ -706,7 +735,9 @@ class DB:
         renders as an empty cell, values are csv-quoted as needed, so the
         owner reconciles off-band payouts in a spreadsheet without touching
         JSON. agent is the same optional exact-match filter as list_payouts
-        (None/blank = every bringer). Read-only, never an error (empty
+        (None/blank = every bringer) and month the same optional pay-month
+        filter in YYYY-MM (None/blank/'all' = every month, malformed raises
+        ValueError for a 400). Read-only, never an error (empty
         ledger is header only). Limit clamped 1..500, default 100. New
         export only: list_payouts, /api/payouts, /api/codes, /api/usage,
         badge, history and health shapes untouched."""
@@ -714,7 +745,7 @@ class DB:
         buf = io.StringIO(newline="")
         w = csv.writer(buf)
         w.writerow(cols)
-        for row in self.list_payouts(limit, agent):
+        for row in self.list_payouts(limit, agent, month):
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
@@ -1501,9 +1532,20 @@ def make_handler(db):
                     limit = 100
                 agent = q.get("agent", [None])[0]
                 want = agent.strip() if isinstance(agent, str) and agent.strip() else None
-                return self._json({"ok": True, "agent": want,
-                                     "payouts": db.list_payouts(limit, want),
-                                     "totals": db.get_payout_totals(want)})
+                month = q.get("month", [None])[0]
+                try:
+                    rows = db.list_payouts(limit, want, month)
+                    totals = db.get_payout_totals(want, month)
+                except ValueError as e:
+                    return self._json({"ok": False, "error": str(e)}, 400)
+                mon = month.strip() if isinstance(month, str) and month.strip() else None
+                if isinstance(mon, str) and mon.lower() == "all":
+                    mon = None
+                if mon is not None:
+                    mon = db._norm_month(mon)
+                return self._json({"ok": True, "agent": want, "month": mon,
+                                     "payouts": rows,
+                                     "totals": totals})
             if u.path == "/api/payouts.csv":
                 peer = (self.client_address[0] if self.client_address else "")
                 if peer not in ("127.0.0.1", "::1"):
@@ -1515,7 +1557,11 @@ def make_handler(db):
                     limit = 100
                 agent = q.get("agent", [None])[0]
                 want = agent.strip() if isinstance(agent, str) and agent.strip() else None
-                b = db.payouts_csv(limit, want).encode()
+                month = q.get("month", [None])[0]
+                try:
+                    b = db.payouts_csv(limit, want, month).encode()
+                except ValueError as e:
+                    return self._json({"ok": False, "error": str(e)}, 400)
                 self.send_response(200)
                 self.send_header("content-type", "text/csv; charset=utf-8")
                 self.send_header("content-length", str(len(b)))
