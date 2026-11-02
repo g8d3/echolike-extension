@@ -629,6 +629,38 @@ class DB:
                  "amount": r[3], "currency": r[4],
                  "ref": r[5] or ""} for r in rows]
 
+    def get_payout_totals(self, agent=None):
+        """Paid-out totals over the same filter as list_payouts().
+
+        {payouts, paid}: how many off-band payments the owner recorded and
+        how much they carry per currency (localhost GET /api/payouts serves
+        it as totals next to the rows, so the total paid out reads in one
+        call without summing rows). agent is the same optional exact-match
+        filter (None/blank = every bringer, unknown bringers report zeros).
+        Totals cover the whole filter, never just the ?limit= window of the
+        row list. Sums round to 9 decimals (a lamport). Read-only, never an
+        error (a book without the payouts table reads as none). New totals
+        only: list_payouts, payouts_csv, get_statement, /api/codes,
+        /api/usage, badge, history, codes, sales totals, statement, close
+        and health shapes untouched."""
+        want = agent.strip() if isinstance(agent, str) else ""
+        try:
+            if want:
+                n = self.c.execute("SELECT COUNT(*) FROM payouts WHERE agent=?",
+                                   (want,)).fetchone()
+                rows = self.c.execute(
+                    "SELECT currency, COALESCE(SUM(amount),0) FROM payouts "
+                    "WHERE agent=? GROUP BY currency", (want,)).fetchall()
+            else:
+                n = self.c.execute("SELECT COUNT(*) FROM payouts").fetchone()
+                rows = self.c.execute(
+                    "SELECT currency, COALESCE(SUM(amount),0) FROM payouts "
+                    "GROUP BY currency").fetchall()
+        except sqlite3.Error:
+            return {"payouts": 0, "paid": {}}
+        return {"payouts": n[0] if n else 0,
+                "paid": {r[0]: round(r[1], 9) for r in rows}}
+
     def get_statement(self, agent, limit=100):
         """Per-bringer payout statement in one read, newest payouts first.
 
@@ -1360,7 +1392,8 @@ def make_handler(db):
                 agent = q.get("agent", [None])[0]
                 want = agent.strip() if isinstance(agent, str) and agent.strip() else None
                 return self._json({"ok": True, "agent": want,
-                                     "payouts": db.list_payouts(limit, want)})
+                                     "payouts": db.list_payouts(limit, want),
+                                     "totals": db.get_payout_totals(want)})
             if u.path == "/api/payouts.csv":
                 peer = (self.client_address[0] if self.client_address else "")
                 if peer not in ("127.0.0.1", "::1"):
