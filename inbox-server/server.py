@@ -435,7 +435,7 @@ class DB:
                 raise ValueError("could not mint a unique code")
         return codes
 
-    def redeem_code(self, user_id, code):
+    def redeem_code(self, user_id, code, referred_by=None):
         """Redeem a prepaid code into granted credits. Returns the new total.
 
         Single-use: the first redeemer wins, a second redeem raises
@@ -443,7 +443,11 @@ class DB:
         blank codes ValueError, revoked codes LookupError("revoked"),
         codes past their expires_at LookupError("expired"). The
         grant carries the code's stored reason,
-        so the history shows why the credits exist."""
+        so the history shows why the credits exist. An optional
+        referred_by names the agent id that brought this buyer; it stamps
+        first-touch (INSERT OR IGNORE, self/junk ignored) only after every
+        gate passes, so a failed redeem never squats a referral and the
+        winner's stamp is the one that sticks."""
         if not isinstance(user_id, str) or not user_id:
             raise ValueError("user_id must be a non-empty string")
         if not isinstance(code, str) or not code.strip():
@@ -459,6 +463,9 @@ class DB:
             raise LookupError("already redeemed")
         if row[4] and row[4] <= utcnow():
             raise LookupError("expired")
+        if isinstance(referred_by, str) and referred_by and referred_by != user_id:
+            self.c.execute("INSERT OR IGNORE INTO referrals (user_id, referred_by, at) VALUES (?,?,?)",
+                           (user_id, referred_by[:120], utcnow()))
         self.c.execute("INSERT INTO grants (at, day, user_id, credits, reason) VALUES (?,?,?,?,?)",
                        (utcnow(), today(), user_id, row[0], row[1]))
         self.c.execute("UPDATE grant_codes SET redeemed_by=?, redeemed_at=? WHERE code=?",
@@ -1049,7 +1056,7 @@ def make_handler(db):
             except (ValueError, OSError):
                 return self._json({"ok": False, "error": "bad json"}, 400)
             try:
-                total = db.redeem_code(uid, body.get("code"))
+                total = db.redeem_code(uid, body.get("code"), body.get("referred_by"))
             except ValueError as e:
                 return self._json({"ok": False, "error": str(e)}, 400)
             except LookupError as e:
