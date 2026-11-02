@@ -911,7 +911,7 @@ class DB:
                           else close["commission_pct"]])
         return buf.getvalue()
 
-    def list_codes(self, limit=100, agent=None, state=None):
+    def list_codes(self, limit=100, agent=None, state=None, month=None):
         """Prepaid code inventory, newest first.
 
         Read-only view over grant_codes for the owner (localhost GET
@@ -932,7 +932,12 @@ class DB:
         answers 'what sold / what is still out' without grepping the full
         book): None/blank/'all' = every code, 'redeemed' = redeemed_by set,
         'revoked' = unredeemed but revoked, 'outstanding' = live unsold
-        codes; unknown states report []. agent and state combine (AND)."""
+        codes; unknown states report []. month is an optional mint-month
+        filter in YYYY-MM on created_at (localhost GET /api/codes?month=X
+        answers 'which codes entered the book this month' next to the
+        per-month /api/close reckoning); None or blank means every month,
+        a malformed month raises ValueError (the route answers 400, same
+        vocabulary as /api/close). agent, state and month combine (AND)."""
         try:
             limit = int(limit)
         except (TypeError, ValueError):
@@ -944,6 +949,13 @@ class DB:
             s = ""
         elif s not in ("redeemed", "revoked", "outstanding"):
             return []
+        m = None
+        if isinstance(month, str) and month.strip().lower() == "all":
+            month = None
+        if month is not None and (not isinstance(month, str) or month.strip()):
+            m = self._norm_month(month)
+            if m is None:
+                raise ValueError("month must be YYYY-MM")
         try:
             conds = []
             params = []
@@ -956,6 +968,9 @@ class DB:
                 conds.append("(redeemed_by IS NULL OR redeemed_by='') AND revoked IS NOT NULL AND revoked<>''")
             elif s == "outstanding":
                 conds.append("(redeemed_by IS NULL OR redeemed_by='') AND (revoked IS NULL OR revoked='')")
+            if m:
+                conds.append("substr(created_at,1,7)=?")
+                params.append(m)
             where = ("WHERE " + " AND ".join(conds)) if conds else ""
             params.append(limit)
             rows = self.c.execute(
@@ -974,7 +989,7 @@ class DB:
                  "sale_ref": r[10] or None,
                  "bringer": r[11] or None} for r in rows]
 
-    def codes_csv(self, limit=100, agent=None, state=None):
+    def codes_csv(self, limit=100, agent=None, state=None, month=None):
         """Sales book as CSV, newest first (same rows as list_codes).
 
         One header row plus one row per code for the owner (localhost GET
@@ -985,8 +1000,10 @@ class DB:
         the owner opens the book in a spreadsheet without touching JSON.
         Read-only, never an error (empty book is header only). Limit
         clamped 1..500, default 100. agent is the same optional
-        exact-match bringer filter (None/blank = every code) and state the
-        same optional redeem-state filter (None/blank/'all' = every code).
+        exact-match bringer filter (None/blank = every code), state the
+        same optional redeem-state filter (None/blank/'all' = every code)
+        and month the same optional mint-month filter in YYYY-MM
+        (None/blank = every month, malformed raises ValueError for a 400).
         Totals stay
         whole-book by design (see get_sales_totals). New export only: list_codes,
         /api/codes, /api/usage, badge, history and health shapes untouched."""
@@ -996,7 +1013,7 @@ class DB:
         buf = io.StringIO(newline="")
         w = csv.writer(buf)
         w.writerow(cols)
-        for row in self.list_codes(limit, agent, state):
+        for row in self.list_codes(limit, agent, state, month):
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
@@ -1431,8 +1448,18 @@ def make_handler(db):
                 st = state.strip().lower() if isinstance(state, str) and state.strip() else None
                 if st == "all":
                     st = None
-                return self._json({"ok": True, "agent": want, "state": st,
-                                     "codes": db.list_codes(limit, want, st),
+                month = q.get("month", [None])[0]
+                mo = month.strip() if isinstance(month, str) and month.strip() else None
+                if mo is not None and mo.lower() == "all":
+                    mo = None
+                try:
+                    codes = db.list_codes(limit, want, st, mo)
+                except ValueError as e:
+                    return self._json({"ok": False, "error": str(e)}, 400)
+                if mo is not None:
+                    mo = db._norm_month(mo)
+                return self._json({"ok": True, "agent": want, "state": st, "month": mo,
+                                     "codes": codes,
                                      "totals": db.get_sales_totals()})
             if u.path == "/api/codes.csv":
                 peer = (self.client_address[0] if self.client_address else "")
@@ -1449,7 +1476,14 @@ def make_handler(db):
                 st = state.strip().lower() if isinstance(state, str) and state.strip() else None
                 if st == "all":
                     st = None
-                b = db.codes_csv(limit, want, st).encode()
+                month = q.get("month", [None])[0]
+                mo = month.strip() if isinstance(month, str) and month.strip() else None
+                if mo is not None and mo.lower() == "all":
+                    mo = None
+                try:
+                    b = db.codes_csv(limit, want, st, mo).encode()
+                except ValueError as e:
+                    return self._json({"ok": False, "error": str(e)}, 400)
                 self.send_response(200)
                 self.send_header("content-type", "text/csv; charset=utf-8")
                 self.send_header("content-length", str(len(b)))
