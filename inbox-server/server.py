@@ -1194,6 +1194,79 @@ class DB:
             for a in sorted(per_agent_day)}
         return zero
 
+    def get_filtered_sales_totals(self, agent=None, state=None, month=None):
+        """Recorded revenue over the sales-book filter, read-only.
+
+        {codes, redeemed, revoked, outstanding, with_sale, sales:{CUR: total}}
+        over exactly the rows list_codes(limit, agent, state, month) would
+        list (localhost GET /api/codes serves it as filtered next to codes,
+        so the owner reads the recorded revenue for one bringer, one state
+        or one mint month without summing rows or opening /api/close).
+        Totals cover the whole filter, never just the ?limit= window of the
+        row list. The full-book totals stay where they were (get_sales_totals
+        served as totals, whole-book by design); settlement attribution
+        (by_referrer, owed, paid, payable, timeline) stays there too: the
+        settled reckoning for one month is the per-month /api/close, per
+        bringer the per-bringer /api/statement. Same filter vocabulary as
+        list_codes: agent exact-match (None/blank = every bringer), state
+        redeemed/revoked/outstanding (None/blank/'all' = every state,
+        unknown states report zeros beside the empty row list), month
+        mint-month YYYY-MM on created_at (None/blank/'all' = every month,
+        malformed raises ValueError for a 400). Sums round to 9 decimals
+        (a lamport). No new table, never an error except the malformed
+        month. New totals only: list_codes, /api/codes rows/totals,
+        /api/usage, badge, history and health shapes untouched."""
+        zero = {"codes": 0, "redeemed": 0, "revoked": 0, "outstanding": 0,
+                "with_sale": 0, "sales": {}}
+        want = agent.strip() if isinstance(agent, str) else ""
+        s = state.strip().lower() if isinstance(state, str) else ""
+        if s in ("", "all"):
+            s = ""
+        elif s not in ("redeemed", "revoked", "outstanding"):
+            return zero
+        m = None
+        if isinstance(month, str) and month.strip().lower() == "all":
+            month = None
+        if month is not None and (not isinstance(month, str) or month.strip()):
+            m = self._norm_month(month)
+            if m is None:
+                raise ValueError("month must be YYYY-MM")
+        try:
+            conds = []
+            params = []
+            if want:
+                conds.append("bringer=?")
+                params.append(want)
+            if s == "redeemed":
+                conds.append("redeemed_by IS NOT NULL AND redeemed_by<>''")
+            elif s == "revoked":
+                conds.append("(redeemed_by IS NULL OR redeemed_by='') AND revoked IS NOT NULL AND revoked<>''")
+            elif s == "outstanding":
+                conds.append("(redeemed_by IS NULL OR redeemed_by='') AND (revoked IS NULL OR revoked='')")
+            if m:
+                conds.append("substr(created_at,1,7)=?")
+                params.append(m)
+            where = ("WHERE " + " AND ".join(conds)) if conds else ""
+            rows = self.c.execute(
+                "SELECT redeemed_by, revoked, sale_amount, sale_currency "
+                "FROM grant_codes " + where, tuple(params)).fetchall()
+        except sqlite3.Error:
+            return zero
+        sales = {}
+        for redeemed_by, revoked, amount, currency in rows:
+            zero["codes"] += 1
+            if redeemed_by:
+                zero["redeemed"] += 1
+            elif revoked:
+                zero["revoked"] += 1
+            else:
+                zero["outstanding"] += 1
+            if amount is not None and currency:
+                zero["with_sale"] += 1
+                sales[currency] = sales.get(currency, 0) + float(amount)
+        zero["sales"] = {k: round(v, 9) for k, v in sorted(sales.items())}
+        return zero
+
     def get_referrer(self, user_id):
         """The agent id that first brought this user, or None.
 
@@ -1539,12 +1612,14 @@ def make_handler(db):
                     mo = None
                 try:
                     codes = db.list_codes(limit, want, st, mo)
+                    filtered = db.get_filtered_sales_totals(want, st, mo)
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 if mo is not None:
                     mo = db._norm_month(mo)
                 return self._json({"ok": True, "agent": want, "state": st, "month": mo,
                                      "codes": codes,
+                                     "filtered": filtered,
                                      "totals": db.get_sales_totals()})
             if u.path == "/api/codes.csv":
                 peer = (self.client_address[0] if self.client_address else "")
