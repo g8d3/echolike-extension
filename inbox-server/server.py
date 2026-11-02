@@ -592,6 +592,37 @@ class DB:
                  "amount": r[3], "currency": r[4],
                  "ref": r[5] or ""} for r in rows]
 
+    def get_statement(self, agent, limit=100):
+        """Per-bringer payout statement in one read, newest payouts first.
+
+        {agent, settled, owed, paid, payable, daily, payouts} for the owner
+        (localhost GET /api/statement?agent=X): the payout moment on one
+        screen — what this bringer's clients settled, what the bringer is
+        owed at the env rate, what was already paid off-band, what is still
+        due, the bringer's daily settled split (newest first, sparse) and
+        the bringer's payment rows (same shape as /api/payouts). Slices of
+        get_sales_totals() plus list_payouts(limit, agent); no new table,
+        never an error, unknown agents report empty maps and []. Blank
+        agents report agent None with everything empty (the HTTP layer
+        refuses them with 400: a statement is per-bringer, the full ledger
+        already answers everyone)."""
+        want = agent.strip() if isinstance(agent, str) else ""
+        if not want:
+            return {"agent": None, "settled": {}, "owed": {},
+                    "paid": {}, "payable": {}, "daily": [], "payouts": []}
+        try:
+            t = self.get_sales_totals()
+        except sqlite3.Error:
+            t = {"by_referrer": {}, "owed": {}, "paid": {},
+                 "payable": {}, "by_referrer_daily": {}}
+        return {"agent": want,
+                "settled": t.get("by_referrer", {}).get(want, {}),
+                "owed": t.get("owed", {}).get(want, {}),
+                "paid": t.get("paid", {}).get(want, {}),
+                "payable": t.get("payable", {}).get(want, {}),
+                "daily": t.get("by_referrer_daily", {}).get(want, []),
+                "payouts": self.list_payouts(limit, want)}
+
     def list_codes(self, limit=100):
         """Prepaid code inventory, newest first.
 
@@ -980,6 +1011,20 @@ def make_handler(db):
                 want = agent.strip() if isinstance(agent, str) and agent.strip() else None
                 return self._json({"ok": True, "agent": want,
                                      "payouts": db.list_payouts(limit, want)})
+            if u.path == "/api/statement":
+                peer = (self.client_address[0] if self.client_address else "")
+                if peer not in ("127.0.0.1", "::1"):
+                    return self._json({"ok": False, "error": "statement only from this machine"}, 403)
+                q = parse_qs(u.query)
+                try:
+                    limit = max(1, min(500, int(q.get("limit", ["100"])[0])))
+                except ValueError:
+                    limit = 100
+                agent = q.get("agent", [None])[0]
+                want = agent.strip() if isinstance(agent, str) and agent.strip() else ""
+                if not want:
+                    return self._json({"ok": False, "error": "agent required"}, 400)
+                return self._json({"ok": True, **db.get_statement(want, limit)})
             if u.path == "/" or u.path == "/index.html":
                 items = ""
                 try:
