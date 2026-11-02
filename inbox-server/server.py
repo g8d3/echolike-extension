@@ -19,7 +19,9 @@ Desde el teléfono usa la IP de ESTE pc (p. ej. http://100.x:8911 si usas
 Tailscale, o http://192.168.x.x:8911 en tu wifi). Nada sale a internet.
 """
 import argparse
+import csv
 import hashlib
+import io
 import subprocess
 import time as _time
 import json
@@ -656,6 +658,27 @@ class DB:
                  "sale_currency": r[9] or None,
                  "sale_ref": r[10] or None} for r in rows]
 
+    def codes_csv(self, limit=100):
+        """Sales book as CSV, newest first (same rows as list_codes).
+
+        One header row plus one row per code for the owner (localhost GET
+        /api/codes.csv): code,credits,reason,created_at,redeemed_by,
+        redeemed_at,revoked,expires_at,sale_amount,sale_currency,sale_ref.
+        None renders as an empty cell, values are csv-quoted as needed, so
+        the owner opens the book in a spreadsheet without touching JSON.
+        Read-only, never an error (empty book is header only). Limit
+        clamped 1..500, default 100. New export only: list_codes,
+        /api/codes, /api/usage, badge, history and health shapes untouched."""
+        cols = ("code", "credits", "reason", "created_at", "redeemed_by",
+                "redeemed_at", "revoked", "expires_at", "sale_amount",
+                "sale_currency", "sale_ref")
+        buf = io.StringIO(newline="")
+        w = csv.writer(buf)
+        w.writerow(cols)
+        for row in self.list_codes(limit):
+            w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
+        return buf.getvalue()
+
     def get_sales_totals(self):
         """Recorded revenue totals over prepaid codes, read-only.
 
@@ -998,6 +1021,22 @@ def make_handler(db):
                     limit = 100
                 return self._json({"ok": True, "codes": db.list_codes(limit),
                                      "totals": db.get_sales_totals()})
+            if u.path == "/api/codes.csv":
+                peer = (self.client_address[0] if self.client_address else "")
+                if peer not in ("127.0.0.1", "::1"):
+                    return self._json({"ok": False, "error": "codes only from this machine"}, 403)
+                q = parse_qs(u.query)
+                try:
+                    limit = max(1, min(500, int(q.get("limit", ["100"])[0])))
+                except ValueError:
+                    limit = 100
+                b = db.codes_csv(limit).encode()
+                self.send_response(200)
+                self.send_header("content-type", "text/csv; charset=utf-8")
+                self.send_header("content-length", str(len(b)))
+                self.end_headers()
+                self.wfile.write(b)
+                return
             if u.path == "/api/payouts":
                 peer = (self.client_address[0] if self.client_address else "")
                 if peer not in ("127.0.0.1", "::1"):
