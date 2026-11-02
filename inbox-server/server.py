@@ -911,7 +911,7 @@ class DB:
                           else close["commission_pct"]])
         return buf.getvalue()
 
-    def list_codes(self, limit=100, agent=None):
+    def list_codes(self, limit=100, agent=None, state=None):
         """Prepaid code inventory, newest first.
 
         Read-only view over grant_codes for the owner (localhost GET
@@ -927,26 +927,42 @@ class DB:
         the mint-time bringer stamp (localhost GET /api/codes?agent=X
         answers 'which codes did I tag for THIS bringer' without grepping
         the full book); None or blank means every code, unknown bringers
-        report []."""
+        report []. state is an optional redeem-state filter using the same
+        words as get_sales_totals (localhost GET /api/codes?state=X
+        answers 'what sold / what is still out' without grepping the full
+        book): None/blank/'all' = every code, 'redeemed' = redeemed_by set,
+        'revoked' = unredeemed but revoked, 'outstanding' = live unsold
+        codes; unknown states report []. agent and state combine (AND)."""
         try:
             limit = int(limit)
         except (TypeError, ValueError):
             limit = 100
         limit = max(1, min(500, limit))
         want = agent.strip() if isinstance(agent, str) else ""
+        s = state.strip().lower() if isinstance(state, str) else ""
+        if s in ("", "all"):
+            s = ""
+        elif s not in ("redeemed", "revoked", "outstanding"):
+            return []
         try:
+            conds = []
+            params = []
             if want:
-                rows = self.c.execute(
-                    "SELECT code, credits, reason, created_at, redeemed_by, redeemed_at, revoked, expires_at, "
-                    "sale_amount, sale_currency, sale_ref, bringer "
-                    "FROM grant_codes WHERE bringer=? ORDER BY rowid DESC LIMIT ?",
-                    (want, limit)).fetchall()
-            else:
-                rows = self.c.execute(
-                    "SELECT code, credits, reason, created_at, redeemed_by, redeemed_at, revoked, expires_at, "
-                    "sale_amount, sale_currency, sale_ref, bringer "
-                    "FROM grant_codes ORDER BY rowid DESC LIMIT ?",
-                    (limit,)).fetchall()
+                conds.append("bringer=?")
+                params.append(want)
+            if s == "redeemed":
+                conds.append("redeemed_by IS NOT NULL AND redeemed_by<>''")
+            elif s == "revoked":
+                conds.append("(redeemed_by IS NULL OR redeemed_by='') AND revoked IS NOT NULL AND revoked<>''")
+            elif s == "outstanding":
+                conds.append("(redeemed_by IS NULL OR redeemed_by='') AND (revoked IS NULL OR revoked='')")
+            where = ("WHERE " + " AND ".join(conds)) if conds else ""
+            params.append(limit)
+            rows = self.c.execute(
+                "SELECT code, credits, reason, created_at, redeemed_by, redeemed_at, revoked, expires_at, "
+                "sale_amount, sale_currency, sale_ref, bringer "
+                "FROM grant_codes " + where + " ORDER BY rowid DESC LIMIT ?",
+                tuple(params)).fetchall()
         except sqlite3.Error:
             return []
         return [{"code": r[0], "credits": r[1], "reason": r[2],
@@ -958,7 +974,7 @@ class DB:
                  "sale_ref": r[10] or None,
                  "bringer": r[11] or None} for r in rows]
 
-    def codes_csv(self, limit=100, agent=None):
+    def codes_csv(self, limit=100, agent=None, state=None):
         """Sales book as CSV, newest first (same rows as list_codes).
 
         One header row plus one row per code for the owner (localhost GET
@@ -969,7 +985,9 @@ class DB:
         the owner opens the book in a spreadsheet without touching JSON.
         Read-only, never an error (empty book is header only). Limit
         clamped 1..500, default 100. agent is the same optional
-        exact-match bringer filter (None/blank = every code). Totals stay
+        exact-match bringer filter (None/blank = every code) and state the
+        same optional redeem-state filter (None/blank/'all' = every code).
+        Totals stay
         whole-book by design (see get_sales_totals). New export only: list_codes,
         /api/codes, /api/usage, badge, history and health shapes untouched."""
         cols = ("code", "credits", "reason", "created_at", "redeemed_by",
@@ -978,7 +996,7 @@ class DB:
         buf = io.StringIO(newline="")
         w = csv.writer(buf)
         w.writerow(cols)
-        for row in self.list_codes(limit, agent):
+        for row in self.list_codes(limit, agent, state):
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
@@ -1409,8 +1427,12 @@ def make_handler(db):
                     limit = 100
                 agent = q.get("agent", [None])[0]
                 want = agent.strip() if isinstance(agent, str) and agent.strip() else None
-                return self._json({"ok": True, "agent": want,
-                                     "codes": db.list_codes(limit, want),
+                state = q.get("state", [None])[0]
+                st = state.strip().lower() if isinstance(state, str) and state.strip() else None
+                if st == "all":
+                    st = None
+                return self._json({"ok": True, "agent": want, "state": st,
+                                     "codes": db.list_codes(limit, want, st),
                                      "totals": db.get_sales_totals()})
             if u.path == "/api/codes.csv":
                 peer = (self.client_address[0] if self.client_address else "")
@@ -1423,7 +1445,11 @@ def make_handler(db):
                     limit = 100
                 agent = q.get("agent", [None])[0]
                 want = agent.strip() if isinstance(agent, str) and agent.strip() else None
-                b = db.codes_csv(limit, want).encode()
+                state = q.get("state", [None])[0]
+                st = state.strip().lower() if isinstance(state, str) and state.strip() else None
+                if st == "all":
+                    st = None
+                b = db.codes_csv(limit, want, st).encode()
                 self.send_response(200)
                 self.send_header("content-type", "text/csv; charset=utf-8")
                 self.send_header("content-length", str(len(b)))
