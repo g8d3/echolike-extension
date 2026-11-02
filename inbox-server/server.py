@@ -625,6 +625,26 @@ class DB:
                 "daily": t.get("by_referrer_daily", {}).get(want, []),
                 "payouts": self.list_payouts(limit, want)}
 
+    def payouts_csv(self, limit=100, agent=None):
+        """Payout ledger as CSV, newest first (same rows as list_payouts).
+
+        One header row plus one row per payment for the owner (localhost
+        GET /api/payouts.csv): at,day,agent,amount,currency,ref. None
+        renders as an empty cell, values are csv-quoted as needed, so the
+        owner reconciles off-band payouts in a spreadsheet without touching
+        JSON. agent is the same optional exact-match filter as list_payouts
+        (None/blank = every bringer). Read-only, never an error (empty
+        ledger is header only). Limit clamped 1..500, default 100. New
+        export only: list_payouts, /api/payouts, /api/codes, /api/usage,
+        badge, history and health shapes untouched."""
+        cols = ("at", "day", "agent", "amount", "currency", "ref")
+        buf = io.StringIO(newline="")
+        w = csv.writer(buf)
+        w.writerow(cols)
+        for row in self.list_payouts(limit, agent):
+            w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
+        return buf.getvalue()
+
     def list_codes(self, limit=100):
         """Prepaid code inventory, newest first.
 
@@ -1050,6 +1070,24 @@ def make_handler(db):
                 want = agent.strip() if isinstance(agent, str) and agent.strip() else None
                 return self._json({"ok": True, "agent": want,
                                      "payouts": db.list_payouts(limit, want)})
+            if u.path == "/api/payouts.csv":
+                peer = (self.client_address[0] if self.client_address else "")
+                if peer not in ("127.0.0.1", "::1"):
+                    return self._json({"ok": False, "error": "payouts only from this machine"}, 403)
+                q = parse_qs(u.query)
+                try:
+                    limit = max(1, min(500, int(q.get("limit", ["100"])[0])))
+                except ValueError:
+                    limit = 100
+                agent = q.get("agent", [None])[0]
+                want = agent.strip() if isinstance(agent, str) and agent.strip() else None
+                b = db.payouts_csv(limit, want).encode()
+                self.send_response(200)
+                self.send_header("content-type", "text/csv; charset=utf-8")
+                self.send_header("content-length", str(len(b)))
+                self.end_headers()
+                self.wfile.write(b)
+                return
             if u.path == "/api/statement":
                 peer = (self.client_address[0] if self.client_address else "")
                 if peer not in ("127.0.0.1", "::1"):
