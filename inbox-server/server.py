@@ -1122,6 +1122,32 @@ class DB:
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
+    def get_grant_totals(self, user=None):
+        """Granted-credit totals over the same filter as list_grants().
+
+        {grants, credits}: how many manual grants and how many credits they
+        carry for the owner (localhost GET /api/grants serves it as totals
+        next to the rows, so the total granted liability reads in one call
+        without summing rows). user is the same optional exact-match filter
+        (None/blank = every user, unknown users report zeros). Totals cover
+        the whole filter, never just the ?limit= window of the row list.
+        Read-only, never an error, unknown state is all zeros. New totals
+        only: list_grants, grants_csv, grant recording, redeem, /api/usage,
+        badge, history, codes, sales totals, payouts, statement, close
+        and health shapes untouched."""
+        want = user.strip() if isinstance(user, str) else ""
+        try:
+            if want:
+                row = self.c.execute(
+                    "SELECT COUNT(*), COALESCE(SUM(credits),0) FROM grants "
+                    "WHERE user_id=?", (want,)).fetchone()
+            else:
+                row = self.c.execute(
+                    "SELECT COUNT(*), COALESCE(SUM(credits),0) FROM grants").fetchone()
+        except sqlite3.Error:
+            return {"grants": 0, "credits": 0}
+        return {"grants": row[0] if row else 0, "credits": row[1] if row else 0}
+
     def get_spend_history(self, user_id, days=7):
         """Per-day spend off the same cash register, newest first: [{day, spent, granted}].
 
@@ -1365,7 +1391,8 @@ def make_handler(db):
                 user = q.get("user", [None])[0]
                 want = user.strip() if isinstance(user, str) and user.strip() else None
                 return self._json({"ok": True, "user": want,
-                                     "grants": db.list_grants(limit, want)})
+                                     "grants": db.list_grants(limit, want),
+                                     "totals": db.get_grant_totals(want)})
             if u.path == "/api/grants.csv":
                 peer = (self.client_address[0] if self.client_address else "")
                 if peer not in ("127.0.0.1", "::1"):
