@@ -54,24 +54,28 @@ async function pay(s) {
   } catch (e) { /* offline inbox: line stays empty, nothing breaks */ }
 }
 async function redeem() {
-  const codeEl = $("redeem_code"), msgEl = $("msgRedeem");
+  const codeEl = $("redeem_code"), refEl = $("redeem_ref"), msgEl = $("msgRedeem");
   const code = ((codeEl && codeEl.value) || "").trim();
   if (!code) { texto(msgEl, t("errRedeemBlank"), false); return; }
+  const ref = ((refEl && refEl.value) || "").trim();
   const s = await ext.storage.local.get({ inbox_url: "", device_token: "" });
   if (!s.inbox_url || !s.device_token) { texto(msgEl, t("notConnected"), false); return; }
   texto(msgEl, t("redeeming"), true);
+  const body = { code };
+  if (ref) body.referred_by = ref;
   let r;
   try {
     r = await fetch(s.inbox_url.replace(/\/$/, "") + "/api/redeem", {
       method: "POST",
       headers: { "content-type": "application/json", authorization: "Bearer " + s.device_token },
-      body: JSON.stringify({ code })
+      body: JSON.stringify(body)
     });
   } catch (e) { texto(msgEl, t("errCantReach"), false); return; }
   let j = null;
   try { j = await r.json(); } catch (e) {}
   if (r.ok && j && j.ok) {
     codeEl.value = "";
+    if (refEl) refEl.value = "";
     texto(msgEl, t("redeemOk", [String(j.granted_total ?? "")]), true);
     await pintar();
     return;
@@ -163,6 +167,7 @@ async function conectar() {
 
 if ($("redeem")) $("redeem").onclick = redeem;
 if ($("redeem_code")) $("redeem_code").addEventListener("keydown", (e) => { if (e.key === "Enter") redeem(); });
+if ($("redeem_ref")) $("redeem_ref").addEventListener("keydown", (e) => { if (e.key === "Enter") redeem(); });
 $("conectar").onclick = conectar;
 if ($("auto")) $("auto").onclick = async () => {
   texto($("msgInbox"), t("connecting"), true);
