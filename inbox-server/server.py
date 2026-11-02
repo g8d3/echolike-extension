@@ -1063,6 +1063,42 @@ class DB:
             return []
         return [{"day": r[0], "credits": r[1], "reason": r[2]} for r in rows]
 
+    def list_grants(self, limit=100, user=None):
+        """Manual-grant ledger for the owner, newest first, read-only.
+
+        [{at, day, user_id, credits, reason}] over the grants table for the
+        owner (localhost GET /api/grants): one row per manual grant the owner
+        recorded (founder free credits, promo, a top-up after a crypto payment
+        is seen on-chain), so the funding side of the cash register can be
+        checked line by line. Redeemed prepaid codes are not rows here: they
+        flow through the same grants table via redeem_code and do appear, each
+        carrying its mint reason. Never an error, unknown state is an empty
+        list. Limit clamped to 1..500, default 100. user is an optional
+        exact-match filter (localhost GET /api/grants?user=X answers 'what
+        did I give this user?' without grepping the full list); None or blank
+        means every user, unknown users report []."""
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            limit = 100
+        limit = max(1, min(500, limit))
+        want = user.strip() if isinstance(user, str) else ""
+        try:
+            if want:
+                rows = self.c.execute(
+                    "SELECT at, day, user_id, credits, reason "
+                    "FROM grants WHERE user_id=? ORDER BY id DESC LIMIT ?",
+                    (want, limit)).fetchall()
+            else:
+                rows = self.c.execute(
+                    "SELECT at, day, user_id, credits, reason "
+                    "FROM grants ORDER BY id DESC LIMIT ?",
+                    (limit,)).fetchall()
+        except sqlite3.Error:
+            return []
+        return [{"at": r[0], "day": r[1], "user_id": r[2],
+                 "credits": r[3], "reason": r[4] or ""} for r in rows]
+
     def get_spend_history(self, user_id, days=7):
         """Per-day spend off the same cash register, newest first: [{day, spent, granted}].
 
@@ -1294,6 +1330,19 @@ def make_handler(db):
                 self.end_headers()
                 self.wfile.write(b)
                 return
+            if u.path == "/api/grants":
+                peer = (self.client_address[0] if self.client_address else "")
+                if peer not in ("127.0.0.1", "::1"):
+                    return self._json({"ok": False, "error": "grants only from this machine"}, 403)
+                q = parse_qs(u.query)
+                try:
+                    limit = max(1, min(500, int(q.get("limit", ["100"])[0])))
+                except ValueError:
+                    limit = 100
+                user = q.get("user", [None])[0]
+                want = user.strip() if isinstance(user, str) and user.strip() else None
+                return self._json({"ok": True, "user": want,
+                                     "grants": db.list_grants(limit, want)})
             if u.path == "/api/statement":
                 peer = (self.client_address[0] if self.client_address else "")
                 if peer not in ("127.0.0.1", "::1"):
