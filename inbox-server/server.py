@@ -911,7 +911,7 @@ class DB:
                           else close["commission_pct"]])
         return buf.getvalue()
 
-    def list_codes(self, limit=100):
+    def list_codes(self, limit=100, agent=None):
         """Prepaid code inventory, newest first.
 
         Read-only view over grant_codes for the owner (localhost GET
@@ -923,18 +923,30 @@ class DB:
         recorded sale report sale_amount/sale_currency/sale_ref as None,
         codes minted without a bringer report bringer as None;
         never an error, unknown state is an empty list. Limit clamped
-        to 1..500, default 100."""
+        to 1..500, default 100. agent is an optional exact-match filter on
+        the mint-time bringer stamp (localhost GET /api/codes?agent=X
+        answers 'which codes did I tag for THIS bringer' without grepping
+        the full book); None or blank means every code, unknown bringers
+        report []."""
         try:
             limit = int(limit)
         except (TypeError, ValueError):
             limit = 100
         limit = max(1, min(500, limit))
+        want = agent.strip() if isinstance(agent, str) else ""
         try:
-            rows = self.c.execute(
-                "SELECT code, credits, reason, created_at, redeemed_by, redeemed_at, revoked, expires_at, "
-                "sale_amount, sale_currency, sale_ref, bringer "
-                "FROM grant_codes ORDER BY rowid DESC LIMIT ?",
-                (limit,)).fetchall()
+            if want:
+                rows = self.c.execute(
+                    "SELECT code, credits, reason, created_at, redeemed_by, redeemed_at, revoked, expires_at, "
+                    "sale_amount, sale_currency, sale_ref, bringer "
+                    "FROM grant_codes WHERE bringer=? ORDER BY rowid DESC LIMIT ?",
+                    (want, limit)).fetchall()
+            else:
+                rows = self.c.execute(
+                    "SELECT code, credits, reason, created_at, redeemed_by, redeemed_at, revoked, expires_at, "
+                    "sale_amount, sale_currency, sale_ref, bringer "
+                    "FROM grant_codes ORDER BY rowid DESC LIMIT ?",
+                    (limit,)).fetchall()
         except sqlite3.Error:
             return []
         return [{"code": r[0], "credits": r[1], "reason": r[2],
@@ -946,7 +958,7 @@ class DB:
                  "sale_ref": r[10] or None,
                  "bringer": r[11] or None} for r in rows]
 
-    def codes_csv(self, limit=100):
+    def codes_csv(self, limit=100, agent=None):
         """Sales book as CSV, newest first (same rows as list_codes).
 
         One header row plus one row per code for the owner (localhost GET
@@ -956,7 +968,9 @@ class DB:
         None renders as an empty cell, values are csv-quoted as needed, so
         the owner opens the book in a spreadsheet without touching JSON.
         Read-only, never an error (empty book is header only). Limit
-        clamped 1..500, default 100. New export only: list_codes,
+        clamped 1..500, default 100. agent is the same optional
+        exact-match bringer filter (None/blank = every code). Totals stay
+        whole-book by design (see get_sales_totals). New export only: list_codes,
         /api/codes, /api/usage, badge, history and health shapes untouched."""
         cols = ("code", "credits", "reason", "created_at", "redeemed_by",
                 "redeemed_at", "revoked", "expires_at", "sale_amount",
@@ -964,7 +978,7 @@ class DB:
         buf = io.StringIO(newline="")
         w = csv.writer(buf)
         w.writerow(cols)
-        for row in self.list_codes(limit):
+        for row in self.list_codes(limit, agent):
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
@@ -1393,7 +1407,10 @@ def make_handler(db):
                     limit = max(1, min(500, int(q.get("limit", ["100"])[0])))
                 except ValueError:
                     limit = 100
-                return self._json({"ok": True, "codes": db.list_codes(limit),
+                agent = q.get("agent", [None])[0]
+                want = agent.strip() if isinstance(agent, str) and agent.strip() else None
+                return self._json({"ok": True, "agent": want,
+                                     "codes": db.list_codes(limit, want),
                                      "totals": db.get_sales_totals()})
             if u.path == "/api/codes.csv":
                 peer = (self.client_address[0] if self.client_address else "")
@@ -1404,7 +1421,9 @@ def make_handler(db):
                     limit = max(1, min(500, int(q.get("limit", ["100"])[0])))
                 except ValueError:
                     limit = 100
-                b = db.codes_csv(limit).encode()
+                agent = q.get("agent", [None])[0]
+                want = agent.strip() if isinstance(agent, str) and agent.strip() else None
+                b = db.codes_csv(limit, want).encode()
                 self.send_response(200)
                 self.send_header("content-type", "text/csv; charset=utf-8")
                 self.send_header("content-length", str(len(b)))
