@@ -764,7 +764,8 @@ class DB:
         """One month's close per bringer, read-only.
 
         {month, commission_pct, agent, rows:[{agent, currency, settled, owed,
-        paid, payable, settled_n, payouts_n}]} for the owner (localhost
+        paid, payable, settled_n, payouts_n}], totals:{settled, owed, paid,
+        payable, settled_n, payouts_n}} for the owner (localhost
         GET /api/close?month=YYYY-MM&agent=X): the month-end reckoning in one
         read. settled sums REDEEMED prepaid codes carrying a recorded sale
         whose redeemer carries a first-touch referrer stamp (the same
@@ -785,13 +786,19 @@ class DB:
         current UTC month. agent is an optional exact-match bringer filter
         (None/blank = every bringer, unknown bringers report []); the
         response echoes it as agent (None when unfiltered, mirroring
-        /api/payouts)."""
+        /api/payouts). totals sums the filtered rows per currency
+        (settled/owed/paid/payable maps, round-9; owed/payable stay empty
+        without a commission rate) plus settled_n/payouts_n counts, so the
+        month reads its headline without summing rows; unknown months
+        report [] with zero totals."""
         m = self._norm_month(month)
         if m is None:
             raise ValueError("month must be YYYY-MM")
         want = agent.strip() if isinstance(agent, str) and agent.strip() else None
         empty = {"month": m, "commission_pct": COMMISSION_PCT,
-                 "agent": want, "rows": []}
+                 "agent": want, "rows": [],
+                 "totals": {"settled": {}, "owed": {}, "paid": {},
+                            "payable": {}, "settled_n": 0, "payouts_n": 0}}
         try:
             rows = self.c.execute(
                 "SELECT redeemed_by, sale_amount, sale_currency, redeemed_at "
@@ -847,8 +854,26 @@ class DB:
                           "paid": pd, "payable": payable,
                           "settled_n": settled_n.get(key, 0),
                           "payouts_n": paid_n.get(key, 0)})
-        empty["rows"] = ([r for r in out if r["agent"] == want]
-                         if want else out)
+        rows = ([r for r in out if r["agent"] == want]
+                if want else out)
+        tot = {"settled": {}, "owed": {}, "paid": {}, "payable": {},
+               "settled_n": 0, "payouts_n": 0}
+        for r in rows:
+            cur = r["currency"]
+            tot["settled"][cur] = round(
+                tot["settled"].get(cur, 0) + r["settled"], 9)
+            tot["paid"][cur] = round(
+                tot["paid"].get(cur, 0) + r["paid"], 9)
+            if r["owed"] is not None:
+                tot["owed"][cur] = round(
+                    tot["owed"].get(cur, 0) + r["owed"], 9)
+            if r["payable"] is not None:
+                tot["payable"][cur] = round(
+                    tot["payable"].get(cur, 0) + r["payable"], 9)
+            tot["settled_n"] += r["settled_n"]
+            tot["payouts_n"] += r["payouts_n"]
+        empty["rows"] = rows
+        empty["totals"] = tot
         return empty
 
     def close_csv(self, month=None, agent=None):
