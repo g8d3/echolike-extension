@@ -105,6 +105,13 @@ def utcnow():
     return datetime.now(timezone.utc).isoformat()
 
 
+def _metric(v):
+    """A visible X counter: a non-negative int, or None when X did not show it."""
+    if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+        return None
+    return v
+
+
 def today():
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -116,8 +123,13 @@ class DB:
         self.c.execute("CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0)")
         self.c.execute("CREATE TABLE IF NOT EXISTS likes (id TEXT PRIMARY KEY, device TEXT NOT NULL, kind TEXT, handle TEXT, url TEXT, text TEXT, nota TEXT, clicked_at TEXT, recv_at TEXT, raw TEXT)")
         # Which phone/PC sent it: without this, two devices with the same token are one blur (added 2026-10-29).
+        # Visible X counters at capture time (added 2026-11-02: the extension reads
+        # replies/reposts/likes/views from the tweet action bar; bookmarks have no
+        # public counter on X, so that column never exists). Null = X did not show it.
         cols = {r[1] for r in self.c.execute("PRAGMA table_info(likes)")}
-        for c, t in (("ua", "TEXT"), ("ip", "TEXT")):
+        for c, t in (("ua", "TEXT"), ("ip", "TEXT"),
+                      ("replies", "INTEGER"), ("reposts", "INTEGER"),
+                      ("likes", "INTEGER"), ("views", "INTEGER")):
             if c not in cols:
                 self.c.execute(f"ALTER TABLE likes ADD COLUMN {c} {t}")
         dcols = {r[1] for r in self.c.execute("PRAGMA table_info(devices)")}
@@ -816,16 +828,18 @@ class DB:
                 continue
             iid = str(it.get("id") or secrets.token_hex(12))
             kind = str(it.get("kind", ""))
+            metrics = {k: _metric(it.get(k)) for k in ("replies", "reposts", "likes", "views")}
             # how long the client's POST took to come back (the number its toast shows)
             if post_ms is not None and "post_ms" not in it:
                 it["post_ms"] = post_ms
             try:
                 self.c.execute(
-                    "INSERT OR IGNORE INTO likes (id, device, kind, handle, url, text, nota, clicked_at, recv_at, raw, ua, ip) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT OR IGNORE INTO likes (id, device, kind, handle, url, text, nota, clicked_at, recv_at, raw, ua, ip, replies, reposts, likes, views) VALUES (?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?)",
                     (iid, device, kind, str(it.get("handle", "") or ""), str(it.get("url", "") or ""),
                      str(it.get("text", "") or "")[:4000], str(it.get("nota", "") or "")[:4000],
                      str(it.get("clicked_at", "") or ""), utcnow(), json.dumps(it)[:8000],
-                     str(ua or "")[:300], str(ip or "")[:60]),
+                     str(ua or "")[:300], str(ip or "")[:60],
+                     metrics["replies"], metrics["reposts"], metrics["likes"], metrics["views"]),
                 )
                 got.append({"id": iid, "kind": kind})
             except sqlite3.Error:
@@ -841,9 +855,10 @@ class DB:
         if not devs:
             return []
         marks = ",".join("?" * len(devs))
-        rows = self.c.execute(f"SELECT id, kind, handle, url, text, nota, clicked_at, recv_at FROM likes WHERE device IN ({marks}) ORDER BY recv_at DESC LIMIT ?",
+        rows = self.c.execute(f"SELECT id, kind, handle, url, text, nota, clicked_at, recv_at, replies, reposts, likes, views FROM likes WHERE device IN ({marks}) ORDER BY recv_at DESC LIMIT ?",
                               (*devs, limit)).fetchall()
-        return [{"id": r[0], "kind": r[1], "handle": r[2], "url": r[3], "text": r[4], "nota": r[5], "clicked_at": r[6], "recv_at": r[7]} for r in rows]
+        return [{"id": r[0], "kind": r[1], "handle": r[2], "url": r[3], "text": r[4], "nota": r[5], "clicked_at": r[6], "recv_at": r[7],
+                 "replies": r[8], "reposts": r[9], "likes": r[10], "views": r[11]} for r in rows]
 
 
 def make_handler(db):

@@ -10,6 +10,59 @@
   }
 
   // Extrae datos del tweet que contiene el botón. Pura: solo DOM, testeable con fixtures.
+  // Además de lo básico lee los contadores visibles de la barra de acciones
+  // (replies, reposts, likes, views). Los bookmarks NO tienen contador público
+  // en X: nunca se inventan, quedan null.
+  function parseCount(s) {
+    if (s === null || s === undefined) return null;
+    const m = String(s).toLowerCase().replace(/[\s\u00a0\u202f]+/g, "").match(/([\d.,]+)(mil|mm|[kmb])?/);
+    if (!m) return null;
+    let num = m[1], mult = 1;
+    if (m[2] === "k" || m[2] === "mil") mult = 1e3;
+    else if (m[2] === "m" || m[2] === "mm") mult = 1e6;
+    else if (m[2] === "b") mult = 1e9;
+    if (/^\d{1,3}(\.\d{3})+$/.test(num)) num = num.replace(/\./g, "");   // miles en es (12.345)
+    else if (num.indexOf(".") !== -1 && num.indexOf(",") !== -1) num = num.replace(/,/g, "");
+    else if (num.indexOf(",") !== -1) {
+      const p = num.split(",");
+      num = (p.length === 2 && p[1].length !== 3) ? p[0] + "." + p[1] : p.join("");
+    }
+    const n = parseFloat(num);
+    return isFinite(n) ? Math.round(n * mult) : null;
+  }
+
+  // Un botón/contador: el total real vive en el aria-label ("12 replies",
+  // "1.2K likes"); el texto visible es el compacto ("1.2K"). Sin dígitos = null.
+  function numEn(el) {
+    if (!el) return null;
+    try {
+      const aria = el.getAttribute && el.getAttribute("aria-label");
+      const ma = aria && String(aria).match(/([\d.,\s\u00a0\u202f]+)(mil|mm|[kmb])?\b/i);
+      if (ma) { const n = parseCount((ma[1] || "") + (ma[2] || "")); if (n !== null) return n; }
+    } catch (e) {}
+    const txt = el.innerText || el.textContent || "";
+    const mt = String(txt).match(/([\d.,]+)\s*(mil|mm|[kmb])?\b/i);
+    return mt ? parseCount((mt[1] || "") + (mt[2] || "")) : null;
+  }
+
+  // Contadores de la barra de acciones del tweet propio (no del citado).
+  function metricas(art) {
+    const fueraCita = (el) => { try { return !el.closest('[role="link"][tabindex]'); } catch (e) { return true; } };
+    const primero = (sel) => {
+      let els = [];
+      try { els = art.querySelectorAll(sel); } catch (e) { return null; }
+      for (const el of els) if (fueraCita(el)) return el;
+      return null;
+    };
+    const vista = primero('a[href*="/analytics"]') || primero('[aria-label*="iew"],[aria-label*="ISTA"],[aria-label*="ista"]');
+    return {
+      replies: numEn(primero('[data-testid="reply"]')),
+      reposts: numEn(primero('[data-testid="retweet"]')),
+      likes: numEn(primero('[data-testid="like"],[data-testid="unlike"]')),
+      views: numEn(vista)
+    };
+  }
+
   function extraer(boton, loc) {
     const art = boton.closest("article") || boton.closest('[data-testid="tweet"]');
     if (!art) return null;
@@ -26,11 +79,11 @@
     if (!m) return null;
     const txtEl = art.querySelector('[data-testid="tweetText"]');
     const time = a && a.querySelector("time");
-    return {
+    return Object.assign({
       id: m[2], handle: m[1], url: `https://x.com/${m[1]}/status/${m[2]}`,
       text: txtEl ? txtEl.innerText || txtEl.textContent || "" : "",
       tweet_time: time ? time.getAttribute("datetime") : null
-    };
+    }, metricas(art));
   }
 
   function evento(target, loc) {
@@ -61,9 +114,10 @@
   function itemNota(d, texto, origen) {
     const t = String(texto || "").trim();
     if (!d || !d.id || !t) return null;
-    const { id, handle, url, text, tweet_time } = d;
+    const { id, handle, url, text, tweet_time, replies = null, reposts = null, likes = null, views = null } = d;
     return { v: 2, kind: "nota_texto", type: "nota_texto", clicked_at: new Date().toISOString(),
-      nota: t.slice(0, 4000), origen: origen || "caja", id, handle, url, text, tweet_time };
+      nota: t.slice(0, 4000), origen: origen || "caja", id, handle, url, text, tweet_time,
+      replies, reposts, likes, views };
   }
   // Teclas dentro de la caja: Enter guarda, Shift+Enter salto de línea, Esc cancela.
   function accionTecla(e) {
@@ -72,7 +126,7 @@
     return null;
   }
 
-  const api = { botonAccion, extraer, evento, ACCIONES, esEditable, teclaAbreNota, teclaEsLike, teclaEsBookmark, itemNota, accionTecla, HOLD_MS, N_MS };
+  const api = { botonAccion, extraer, evento, ACCIONES, esEditable, teclaAbreNota, teclaEsLike, teclaEsBookmark, itemNota, accionTecla, HOLD_MS, N_MS, parseCount, metricas };
   if (typeof module !== "undefined") module.exports = api;
   root.EchoLike = api;
 
