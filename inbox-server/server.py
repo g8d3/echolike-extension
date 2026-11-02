@@ -640,8 +640,8 @@ class DB:
         Totals cover the whole filter, never just the ?limit= window of the
         row list. Sums round to 9 decimals (a lamport). Read-only, never an
         error (a book without the payouts table reads as none). New totals
-        only: list_payouts, payouts_csv, get_statement, /api/codes,
-        /api/usage, badge, history, codes, sales totals, statement, close
+        only: list_payouts, payouts_csv, /api/payouts rows, /api/codes,
+        /api/usage, badge, history, codes, sales totals, statement rows,
         and health shapes untouched."""
         want = agent.strip() if isinstance(agent, str) else ""
         try:
@@ -664,21 +664,26 @@ class DB:
     def get_statement(self, agent, limit=100):
         """Per-bringer payout statement in one read, newest payouts first.
 
-        {agent, settled, owed, paid, payable, daily, payouts} for the owner
-        (localhost GET /api/statement?agent=X): the payout moment on one
-        screen — what this bringer's clients settled, what the bringer is
-        owed at the env rate, what was already paid off-band, what is still
-        due, the bringer's daily settled split (newest first, sparse) and
-        the bringer's payment rows (same shape as /api/payouts). Slices of
-        get_sales_totals() plus list_payouts(limit, agent); no new table,
-        never an error, unknown agents report empty maps and []. Blank
-        agents report agent None with everything empty (the HTTP layer
+        {agent, settled, owed, paid, payable, daily, payouts, totals} for the
+        owner (localhost GET /api/statement?agent=X): the payout moment on
+        one screen — what this bringer's clients settled, what the bringer
+        is owed at the env rate, what was already paid off-band, what is
+        still due, the bringer's daily settled split (newest first, sparse),
+        the bringer's payment rows (same shape as /api/payouts) and totals
+        (the whole payment ledger for this bringer as {payouts, paid},
+        never just the ?limit= window of the row list, so the statement
+        carries its headline without summing rows). Slices of
+        get_sales_totals() plus list_payouts(limit, agent) plus
+        get_payout_totals(agent); no new table, never an error, unknown
+        agents report empty maps, [] and zero totals. Blank agents report
+        agent None with everything empty and zero totals (the HTTP layer
         refuses them with 400: a statement is per-bringer, the full ledger
         already answers everyone)."""
         want = agent.strip() if isinstance(agent, str) else ""
         if not want:
             return {"agent": None, "settled": {}, "owed": {},
-                    "paid": {}, "payable": {}, "daily": [], "payouts": []}
+                    "paid": {}, "payable": {}, "daily": [], "payouts": [],
+                    "totals": {"payouts": 0, "paid": {}}}
         try:
             t = self.get_sales_totals()
         except sqlite3.Error:
@@ -690,7 +695,8 @@ class DB:
                 "paid": t.get("paid", {}).get(want, {}),
                 "payable": t.get("payable", {}).get(want, {}),
                 "daily": t.get("by_referrer_daily", {}).get(want, []),
-                "payouts": self.list_payouts(limit, want)}
+                "payouts": self.list_payouts(limit, want),
+                "totals": self.get_payout_totals(want)}
 
     def payouts_csv(self, limit=100, agent=None):
         """Payout ledger as CSV, newest first (same rows as list_payouts).
