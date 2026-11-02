@@ -557,7 +557,7 @@ class DB:
         return {a: {k: round(v, 9) for k, v in sorted(cur.items())}
                 for a, cur in sorted(out.items())}
 
-    def list_payouts(self, limit=100):
+    def list_payouts(self, limit=100, agent=None):
         """Off-band payout ledger, newest first, read-only.
 
         [{at, day, agent, amount, currency, ref}] over the payouts table
@@ -565,17 +565,27 @@ class DB:
         the owner recorded after paying a bringer off-band, so the totals'
         paid{}/payable{} can be checked line by line. ref is '' when the
         owner recorded no tx hash or note; never an error, unknown state
-        is an empty list. Limit clamped to 1..500, default 100."""
+        is an empty list. Limit clamped to 1..500, default 100. agent is
+        an optional exact-match filter (localhost GET /api/payouts?agent=X
+        answers 'did I already pay this bringer?' without grepping the full
+        list); None or blank means every bringer, unknown agents report []."""
         try:
             limit = int(limit)
         except (TypeError, ValueError):
             limit = 100
         limit = max(1, min(500, limit))
+        want = agent.strip() if isinstance(agent, str) else ""
         try:
-            rows = self.c.execute(
-                "SELECT at, day, agent, amount, currency, ref "
-                "FROM payouts ORDER BY rowid DESC LIMIT ?",
-                (limit,)).fetchall()
+            if want:
+                rows = self.c.execute(
+                    "SELECT at, day, agent, amount, currency, ref "
+                    "FROM payouts WHERE agent=? ORDER BY rowid DESC LIMIT ?",
+                    (want, limit)).fetchall()
+            else:
+                rows = self.c.execute(
+                    "SELECT at, day, agent, amount, currency, ref "
+                    "FROM payouts ORDER BY rowid DESC LIMIT ?",
+                    (limit,)).fetchall()
         except sqlite3.Error:
             return []
         return [{"at": r[0], "day": r[1], "agent": r[2],
@@ -966,7 +976,10 @@ def make_handler(db):
                     limit = max(1, min(500, int(q.get("limit", ["100"])[0])))
                 except ValueError:
                     limit = 100
-                return self._json({"ok": True, "payouts": db.list_payouts(limit)})
+                agent = q.get("agent", [None])[0]
+                want = agent.strip() if isinstance(agent, str) and agent.strip() else None
+                return self._json({"ok": True, "agent": want,
+                                     "payouts": db.list_payouts(limit, want)})
             if u.path == "/" or u.path == "/index.html":
                 items = ""
                 try:
