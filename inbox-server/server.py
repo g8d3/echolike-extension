@@ -602,7 +602,8 @@ class DB:
         {codes, redeemed, revoked, outstanding, with_sale, sales:{CUR: total},
         by_referrer:{agent: {CUR: total}}, commission_pct, owed:{agent: {CUR: amount}},
         paid:{agent: {CUR: total}}, payable:{agent: {CUR: amount}},
-        timeline:[{day, sales:{CUR: total}, settled}]}.
+        timeline:[{day, sales:{CUR: total}, settled}],
+        by_referrer_daily:{agent: [{day, sales, settled}]}}.
         Sums every row carrying a sale
         (a revoked code keeps its note: the money arrived, the code was
         killed); free/promo rows count in codes but add nothing. by_referrer
@@ -622,6 +623,11 @@ class DB:
         sums only REDEEMED codes carrying a sale, settled counts them, and
         quiet days report sales{} settled 0 so a chart stays stable. Rows
         with no usable redemption day are ignored there (never an error).
+        by_referrer_daily is the same settlement cut per bringer: {agent:
+        [{day, sales, settled}]} over the same 30-day window, newest first,
+        sparse (only days where that agent's clients settled something, so
+        the payload stays small). It answers WHEN each bringer earned what
+        the by_referrer total already says: the daily commission base.
         Totals always cover the
         whole book, never just the ?limit= window
         of /api/codes. Sums round to 9 decimals (a lamport) so float dust
@@ -630,7 +636,8 @@ class DB:
         zero = {"codes": 0, "redeemed": 0, "revoked": 0, "outstanding": 0,
                 "with_sale": 0, "sales": {}, "by_referrer": {},
                 "commission_pct": COMMISSION_PCT, "owed": {},
-                "paid": {}, "payable": {}, "timeline": []}
+                "paid": {}, "payable": {}, "timeline": [],
+                "by_referrer_daily": {}}
         try:
             rows = self.c.execute(
                 "SELECT redeemed_by, revoked, sale_amount, sale_currency, redeemed_at "
@@ -647,6 +654,7 @@ class DB:
         owed_raw = {}
         per_day = {}
         per_day_n = {}
+        per_agent_day = {}
         for redeemed_by, revoked, amount, currency, redeemed_at in rows:
             zero["codes"] += 1
             if redeemed_by:
@@ -670,6 +678,11 @@ class DB:
                     if COMMISSION_PCT is not None:
                         ob = owed_raw.setdefault(agent, {})
                         ob[currency] = (ob.get(currency, 0) + float(amount) * COMMISSION_PCT / 100)
+                    if isinstance(redeemed_at, str) and len(redeemed_at) >= 10:
+                        aday = redeemed_at[:10]
+                        ab = per_agent_day.setdefault(agent, {}).setdefault(aday, [{}, 0])
+                        ab[0][currency] = ab[0].get(currency, 0) + float(amount)
+                        ab[1] += 1
         zero["sales"] = {k: round(v, 9) for k, v in sorted(sales.items())}
         zero["by_referrer"] = {a: {k: round(v, 9) for k, v in sorted(cur.items())}
                                  for a, cur in sorted(by_ref.items())}
@@ -700,6 +713,12 @@ class DB:
         zero["timeline"] = [{"day": d,
                                "sales": {k: round(v, 9) for k, v in sorted(per_day.get(d, {}).items())},
                                "settled": per_day_n.get(d, 0)} for d in days]
+        zero["by_referrer_daily"] = {
+            a: [{"day": d,
+                 "sales": {k: round(v, 9) for k, v in sorted(per_agent_day[a][d][0].items())},
+                 "settled": per_agent_day[a][d][1]}
+                for d in days if d in per_agent_day.get(a, {})]
+            for a in sorted(per_agent_day)}
         return zero
 
     def get_referrer(self, user_id):
