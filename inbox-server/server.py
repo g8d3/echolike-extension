@@ -645,6 +645,31 @@ class DB:
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
+    def statement_csv(self, agent, limit=100):
+        """One bringer's payout rows as CSV, newest first.
+
+        One header row plus one row per payment for the owner (localhost
+        GET /api/statement.csv?agent=X): at,day,agent,amount,currency,ref —
+        the same rows get_statement() reports as payouts, so the bringer's
+        one-screen statement reconciles in a spreadsheet without touching
+        JSON. None renders as an empty cell, values are csv-quoted as
+        needed. Blank agents render header only (the HTTP layer refuses
+        them with 400: a statement is per-bringer, the full ledger already
+        answers everyone); unknown agents render header only, never an
+        error. Limit clamped 1..500, default 100. New export only:
+        get_statement, list_payouts, /api/statement, /api/payouts,
+        /api/codes, /api/usage, badge, history and health shapes untouched."""
+        cols = ("at", "day", "agent", "amount", "currency", "ref")
+        buf = io.StringIO(newline="")
+        w = csv.writer(buf)
+        w.writerow(cols)
+        want = agent.strip() if isinstance(agent, str) else ""
+        if not want:
+            return buf.getvalue()
+        for row in self.list_payouts(limit, want):
+            w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
+        return buf.getvalue()
+
     def list_codes(self, limit=100):
         """Prepaid code inventory, newest first.
 
@@ -1102,6 +1127,26 @@ def make_handler(db):
                 if not want:
                     return self._json({"ok": False, "error": "agent required"}, 400)
                 return self._json({"ok": True, **db.get_statement(want, limit)})
+            if u.path == "/api/statement.csv":
+                peer = (self.client_address[0] if self.client_address else "")
+                if peer not in ("127.0.0.1", "::1"):
+                    return self._json({"ok": False, "error": "statement only from this machine"}, 403)
+                q = parse_qs(u.query)
+                try:
+                    limit = max(1, min(500, int(q.get("limit", ["100"])[0])))
+                except ValueError:
+                    limit = 100
+                agent = q.get("agent", [None])[0]
+                want = agent.strip() if isinstance(agent, str) and agent.strip() else ""
+                if not want:
+                    return self._json({"ok": False, "error": "agent required"}, 400)
+                b = db.statement_csv(want, limit).encode()
+                self.send_response(200)
+                self.send_header("content-type", "text/csv; charset=utf-8")
+                self.send_header("content-length", str(len(b)))
+                self.end_headers()
+                self.wfile.write(b)
+                return
             if u.path == "/" or u.path == "/index.html":
                 items = ""
                 try:
