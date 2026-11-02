@@ -184,6 +184,15 @@ class DB:
             self.c.execute("ALTER TABLE grant_codes ADD COLUMN sale_amount NUMERIC DEFAULT NULL")
             self.c.execute("ALTER TABLE grant_codes ADD COLUMN sale_currency TEXT NOT NULL DEFAULT ''")
             self.c.execute("ALTER TABLE grant_codes ADD COLUMN sale_ref TEXT NOT NULL DEFAULT ''")
+        # Mint-time bringer: the agent id whose batch this code belongs to
+        # (bringer, '' = none). The owner mints a batch sold through one
+        # bringer and stamps it once; redeeming falls back to it when the
+        # buyer types no bringer and carries no referrer yet, so bulk sales
+        # settle attributed without the buyer typing anything. Bookkeeping
+        # only: stamping moves no money and changes no gate. Added
+        # 2026-11-02; old rows backfill '' and read as None.
+        if "bringer" not in gcols:
+            self.c.execute("ALTER TABLE grant_codes ADD COLUMN bringer TEXT NOT NULL DEFAULT ''")
         # Payouts: what the owner actually paid each bringer off-band
         # (recorded here after the money moves, so the book knows what is
         # settled). localhost POST /api/payout writes one row per payment;
@@ -393,7 +402,7 @@ class DB:
         return amount, currency or "", ref
 
     def mint_code(self, credits, reason="", expires_days=None, sale_amount=None,
-                  sale_currency=None, sale_ref=None):
+                  sale_currency=None, sale_ref=None, bringer=None):
         """Mint one single-use prepaid code worth credits. Returns the code.
 
         Localhost only (the HTTP layer enforces it): the owner mints after
@@ -402,19 +411,37 @@ class DB:
         expires_days (None or '' = never expires, else an integer number of
         days 1..3650) stamps expires_at; redeeming past it raises
         LookupError("expired"). sale_amount/sale_currency/sale_ref record
-        what the buyer paid (see _norm_sale); the sales book shows it."""
+        what the buyer paid (see _norm_sale); the sales book shows it.
+        bringer optionally names the agent id whose batch this code belongs
+        to (see _norm_bringer); redeeming falls back to it for attribution."""
         return self.mint_codes(credits, reason, expires_days, 1, sale_amount,
-                               sale_currency, sale_ref)[0]
+                               sale_currency, sale_ref, bringer)[0]
+
+    @staticmethod
+    def _norm_bringer(bringer):
+        """Normalize an optional mint-time bringer stamp. Returns '' or the id.
+
+        None or a blank string means no bringer (a direct sale, the buyer
+        stamps one at redeem time or not at all). Anything else must be a
+        string: stored stripped and cut at 120 chars like referrals. bool,
+        numbers and other types raise ValueError, because a mistyped bringer
+        would silently misattribute a whole batch."""
+        if bringer is None:
+            return ""
+        if isinstance(bringer, bool) or not isinstance(bringer, str):
+            raise ValueError("bringer must be a string")
+        return bringer.strip()[:120]
 
     def mint_codes(self, credits, reason="", expires_days=None, count=1,
-                   sale_amount=None, sale_currency=None, sale_ref=None):
+                   sale_amount=None, sale_currency=None, sale_ref=None,
+                   bringer=None):
         """Mint count single-use prepaid codes worth credits. Returns [codes].
 
         One call per launch batch: the owner mints N codes with one reason,
-        one deadline and one sale instead of N calls. Same validation as
+        one deadline, one sale and one bringer instead of N calls. Same validation as
         mint_code, plus count (None or '' = 1, else an integer 1..100;
         bool/str/0/negative rejected with ValueError). Every code carries
-        the same credits, reason, expires_at and sale."""
+        the same credits, reason, expires_at, sale and bringer."""
         if isinstance(credits, bool) or not isinstance(credits, int) or credits <= 0:
             raise ValueError("credits must be a positive integer")
         reason = str(reason or "")[:200]
@@ -433,13 +460,14 @@ class DB:
         if not 1 <= count <= 100:
             raise ValueError("count must be between 1 and 100")
         amount, currency, ref = self._norm_sale(sale_amount, sale_currency, sale_ref)
+        who = self._norm_bringer(bringer)
         codes = []
         for _ in range(count):
             for _ in range(10):
                 code = "EL-" + secrets.token_hex(4).upper()
                 try:
-                    self.c.execute("INSERT INTO grant_codes (code, credits, reason, created_at, expires_at, sale_amount, sale_currency, sale_ref) VALUES (?,?,?,?,?,?,?,?)",
-                                   (code, credits, reason, utcnow(), expires_at, amount, currency, ref))
+                    self.c.execute("INSERT INTO grant_codes (code, credits, reason, created_at, expires_at, sale_amount, sale_currency, sale_ref, bringer) VALUES (?,?,?,?,?,?,?,?,?)",
+                                   (code, credits, reason, utcnow(), expires_at, amount, currency, ref, who))
                     self.c.commit()
                     codes.append(code)
                     break
@@ -461,13 +489,17 @@ class DB:
         referred_by names the agent id that brought this buyer; it stamps
         first-touch (INSERT OR IGNORE, self/junk ignored) only after every
         gate passes, so a failed redeem never squats a referral and the
-        winner's stamp is the one that sticks."""
+        winner's stamp is the one that sticks. When the buyer types nothing
+        and carries no referrer yet, the code's own mint-time bringer stamp
+        is used instead, so a batch sold through one bringer settles
+        attributed without the buyer typing anything; a typed bringer wins
+        for a fresh buyer (stamped first), an existing stamp always wins."""
         if not isinstance(user_id, str) or not user_id:
             raise ValueError("user_id must be a non-empty string")
         if not isinstance(code, str) or not code.strip():
             raise ValueError("code must be a non-empty string")
         code = code.strip().upper()
-        row = self.c.execute("SELECT credits, reason, redeemed_by, revoked, expires_at FROM grant_codes WHERE code=?",
+        row = self.c.execute("SELECT credits, reason, redeemed_by, revoked, expires_at, bringer FROM grant_codes WHERE code=?",
                              (code,)).fetchone()
         if not row:
             raise LookupError("unknown code")
@@ -480,6 +512,9 @@ class DB:
         if isinstance(referred_by, str) and referred_by and referred_by != user_id:
             self.c.execute("INSERT OR IGNORE INTO referrals (user_id, referred_by, at) VALUES (?,?,?)",
                            (user_id, referred_by[:120], utcnow()))
+        if isinstance(row[5], str) and row[5] and row[5] != user_id:
+            self.c.execute("INSERT OR IGNORE INTO referrals (user_id, referred_by, at) VALUES (?,?,?)",
+                           (user_id, row[5][:120], utcnow()))
         self.c.execute("INSERT INTO grants (at, day, user_id, credits, reason) VALUES (?,?,?,?,?)",
                        (utcnow(), today(), user_id, row[0], row[1]))
         self.c.execute("UPDATE grant_codes SET redeemed_by=?, redeemed_at=? WHERE code=?",
@@ -812,10 +847,11 @@ class DB:
         Read-only view over grant_codes for the owner (localhost GET
         /api/codes): [{code, credits, reason, created_at, redeemed_by,
         redeemed_at, revoked, expires_at, sale_amount, sale_currency,
-        sale_ref}]. Unredeemed codes report redeemed_by/
+        sale_ref, bringer}]. Unredeemed codes report redeemed_by/
         redeemed_at as None, live codes report revoked as None, codes minted
         without a deadline report expires_at as None, codes minted without a
-        recorded sale report sale_amount/sale_currency/sale_ref as None;
+        recorded sale report sale_amount/sale_currency/sale_ref as None,
+        codes minted without a bringer report bringer as None;
         never an error, unknown state is an empty list. Limit clamped
         to 1..500, default 100."""
         try:
@@ -826,7 +862,7 @@ class DB:
         try:
             rows = self.c.execute(
                 "SELECT code, credits, reason, created_at, redeemed_by, redeemed_at, revoked, expires_at, "
-                "sale_amount, sale_currency, sale_ref "
+                "sale_amount, sale_currency, sale_ref, bringer "
                 "FROM grant_codes ORDER BY rowid DESC LIMIT ?",
                 (limit,)).fetchall()
         except sqlite3.Error:
@@ -837,14 +873,16 @@ class DB:
                  "expires_at": r[7] or None,
                  "sale_amount": r[8],
                  "sale_currency": r[9] or None,
-                 "sale_ref": r[10] or None} for r in rows]
+                 "sale_ref": r[10] or None,
+                 "bringer": r[11] or None} for r in rows]
 
     def codes_csv(self, limit=100):
         """Sales book as CSV, newest first (same rows as list_codes).
 
         One header row plus one row per code for the owner (localhost GET
         /api/codes.csv): code,credits,reason,created_at,redeemed_by,
-        redeemed_at,revoked,expires_at,sale_amount,sale_currency,sale_ref.
+        redeemed_at,revoked,expires_at,sale_amount,sale_currency,sale_ref,
+        bringer.
         None renders as an empty cell, values are csv-quoted as needed, so
         the owner opens the book in a spreadsheet without touching JSON.
         Read-only, never an error (empty book is header only). Limit
@@ -852,7 +890,7 @@ class DB:
         /api/codes, /api/usage, badge, history and health shapes untouched."""
         cols = ("code", "credits", "reason", "created_at", "redeemed_by",
                 "redeemed_at", "revoked", "expires_at", "sale_amount",
-                "sale_currency", "sale_ref")
+                "sale_currency", "sale_ref", "bringer")
         buf = io.StringIO(newline="")
         w = csv.writer(buf)
         w.writerow(cols)
@@ -1385,7 +1423,8 @@ def make_handler(db):
                                       body.get("count", 1) if "count" in body else 1,
                                       body.get("sale_amount"),
                                       body.get("sale_currency"),
-                                      body.get("sale_ref", "") if "sale_ref" in body else "")
+                                      body.get("sale_ref", "") if "sale_ref" in body else "",
+                                      body.get("bringer"))
             except ValueError as e:
                 return self._json({"ok": False, "error": str(e)}, 400)
             latest = {c["code"]: c for c in db.list_codes(len(codes))}
@@ -1396,6 +1435,7 @@ def make_handler(db):
                                "credits": body.get("credits"),
                                "reason": str(body.get("reason", "") or "")[:200],
                                "expires_at": first.get("expires_at"),
+                               "bringer": first.get("bringer"),
                                "sale": sale})
 
         def _redeem(self):
