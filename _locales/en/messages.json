@@ -427,5 +427,8 @@
   },
   "errRedeemOldServer": {
     "message": "That inbox is too old for redeem codes: update server.py."
+  },
+  "errQuotaSpent": {
+    "message": "Free daily quota spent — top up to keep syncing."
   }
 }

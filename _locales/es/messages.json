@@ -423,5 +423,8 @@
   },
   "errRedeemOldServer": {
     "message": "Ese inbox es muy viejo para códigos: actualiza server.py."
+  },
+  "errQuotaSpent": {
+    "message": "Cuota diaria gratuita agotada — recarga para seguir sincronizando."
   }
 }

@@ -130,7 +130,14 @@ async function publicarDirecto(items, c) { // batch POST; confirmation arrives i
     body: JSON.stringify({ items: conLat, post_ms: Date.now() - t0 }),
   });
   if (r.status === 401) throw new Error(t("errBadToken"));
-  if (r.status === 429) throw new Error("inbox HTTP 429");
+  if (r.status === 429) {
+    let body = "";
+    try { body = await r.text(); } catch (e) {}
+    let quota = false;
+    try { quota = (JSON.parse(body) || {}).error === "quota_exceeded"; } catch (e) {}
+    if (quota) throw new Error(t("errQuotaSpent"));
+    throw new Error("inbox HTTP 429");
+  }
   if (!r.ok) throw new Error("inbox HTTP " + r.status + " " + (await r.text()).slice(0, 120));
   const out = await r.json();
   return new Set((out.received || []).map((x) => x.id + "|" + x.kind));
