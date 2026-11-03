@@ -144,6 +144,12 @@ class DB:
         # Pipeline handoffs: likes per user handed to the analysis pipeline (the
         # real inference cost driver). Written by operador/inbox_a_pipeline.py.
         self.c.execute("CREATE TABLE IF NOT EXISTS pipeline (day TEXT NOT NULL, user_id TEXT NOT NULL, handoff_likes INTEGER NOT NULL DEFAULT 0, handoff_runs INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, user_id))")
+        # Would-block meter: likes per user that arrived over quota while the
+        # gate is off (demo mode). The writes are accepted; this only records
+        # what ECHO_ENFORCE_QUOTA=1 would have refused, so the owner decides
+        # the flip with numbers. New table, so old books simply read 0.
+        # Added 2026-11-03.
+        self.c.execute("CREATE TABLE IF NOT EXISTS would_block (day TEXT NOT NULL, user_id TEXT NOT NULL, n INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, user_id))")
         # Inference ledger: actual AI spend per user, recorded by likes_loop.py
         # after each muse call (calls, wall seconds, output chars). The cash
         # register counts first (handoff), this counts what was really spent.
@@ -301,7 +307,8 @@ class DB:
                               "prices": {"inbox_write": PRICE_LIKE_IN, "inbox_read": PRICE_READ,
                                          "analysis_call": PRICE_ANALYSIS}},
                 "quota": {"free_daily": FREE_DAILY, "used_today": ctoday,
-                            "left_today": max(0, FREE_DAILY - ctoday), "enforcing": ENFORCE_QUOTA},
+                            "left_today": max(0, FREE_DAILY - ctoday), "enforcing": ENFORCE_QUOTA,
+                            "would_block_today": self.get_would_block(user_id)},
                 "pipeline": self.get_pipeline(user_id),
                 "inference": self.get_inference(user_id),
                 "balance": {"granted_total": granted, "spent_total": ctotal,
@@ -327,6 +334,25 @@ class DB:
         t = self.c.execute("SELECT COALESCE(SUM(handoff_likes),0), COALESCE(SUM(handoff_runs),0) FROM pipeline WHERE user_id=?", (user_id,)).fetchone()
         return {"today": {"handoff_likes": row[0] if row else 0, "handoff_runs": row[1] if row else 0},
                 "total": {"handoff_likes": t[0], "handoff_runs": t[1]}}
+
+    def bump_would_block(self, user_id, likes_n):
+        """Demo-only meter: likes the enforcement flip would refuse today.
+
+        The write is still accepted (demo refuses nothing); this only counts
+        what ECHO_ENFORCE_QUOTA=1 would have answered 429, per user per day,
+        so the owner sees the flip's blast radius in /api/usage before
+        deciding. Best-effort: never raises."""
+        try:
+            self.c.execute("INSERT INTO would_block (day, user_id, n) VALUES (?,?,?) "
+                           "ON CONFLICT (day, user_id) DO UPDATE SET n = n + excluded.n",
+                           (today(), user_id, int(likes_n)))
+            self.c.commit()
+        except (sqlite3.Error, ValueError, TypeError):
+            pass
+
+    def get_would_block(self, user_id):
+        row = self.c.execute("SELECT n FROM would_block WHERE day=? AND user_id=?", (today(), user_id)).fetchone()
+        return row[0] if row else 0
 
     def bump_inference(self, user_id, seconds=0.0, chars=0):
         """One finished muse call for this user. Best-effort: never raises."""
@@ -2207,11 +2233,18 @@ def make_handler(db):
                 return self._json({"ok": False, "error": "items must be a list"}, 400)
             if not db.check_cap(dev, len(items)):
                 return self._json({"ok": False, "error": "daily cap"}, 429)
-            left = db.quota_left(db.user_of_device(dev))
+            uid = db.user_of_device(dev)
+            left = db.quota_left(uid)
             if left is not None and len(items) * PRICE_LIKE_IN > left:
                 return self._json({"ok": False, "error": "quota_exceeded",
                                    "hint": "free daily quota spent; demo-only, raise ECHO_FREE_DAILY or unset ECHO_ENFORCE_QUOTA",
                                    "quota": {"free_daily": FREE_DAILY, "left_today": left}}, 429)
+            if left is None and PRICE_LIKE_IN > 0:
+                # Demo only: the write below is accepted, but count what the
+                # flip would refuse so the owner decides with numbers.
+                demo_left = db.get_usage(uid)["quota"]["left_today"]
+                if len(items) * PRICE_LIKE_IN > demo_left:
+                    db.bump_would_block(uid, len(items))
             post_ms = body.get("post_ms") if isinstance(body.get("post_ms"), (int, float)) else None
             return self._json({"ok": True, "received": db.store(dev, items, self.headers.get("user-agent") or "",
                                                                 self.headers.get("x-forwarded-for") or self.client_address[0],
