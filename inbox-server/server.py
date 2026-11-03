@@ -368,6 +368,32 @@ class DB:
         except sqlite3.Error:
             return {"today": 0, "total": 0}
 
+    def get_would_block_by_user(self, limit=100):
+        """Demo demand the flip would refuse, per user for the owner.
+
+        [{user_id, today, total}] over the would_block meter (today = this
+        UTC day, total = lifetime per user), biggest refuser first (total
+        desc, user_id asc for ties), capped at limit (junk reads 100,
+        clamped 1..500 like list_codes). Names who the enforcement flip
+        would refuse, so the queued quota decision reads demand per buyer
+        next to the money in the one-URL reckoning. Read-only, never an
+        error, old books without the table read []."""
+        try:
+            limit = max(1, min(500, int(limit)))
+        except (TypeError, ValueError):
+            limit = 100
+        try:
+            rows = self.c.execute(
+                "SELECT user_id, "
+                "COALESCE(SUM(CASE WHEN day=? THEN n ELSE 0 END),0), "
+                "COALESCE(SUM(n),0) FROM would_block "
+                "GROUP BY user_id ORDER BY 3 DESC, user_id ASC LIMIT ?",
+                (today(), limit)).fetchall()
+            return [{"user_id": r[0], "today": r[1], "total": r[2]}
+                    for r in rows]
+        except sqlite3.Error:
+            return []
+
     def bump_inference(self, user_id, seconds=0.0, chars=0):
         """One finished muse call for this user. Best-effort: never raises."""
         try:
@@ -1516,7 +1542,9 @@ class DB:
         get_payout_totals() (off-band payments out), grants is
         get_grant_totals() (credits given out), quota is
         get_would_block_totals() (demo likes the enforcement flip would
-        refuse: today + lifetime, so the queued quota decision reads here).
+        refuse: today + lifetime, so the queued quota decision reads here)
+        plus by_user from get_would_block_by_user() (per-buyer refused
+        demand, biggest refuser first, capped at 100).
         in v1; read-only, never an error, empty book reads zeros.
         New totals only: list/get rows, /api/codes, /api/payouts,
         /api/grants, /api/usage, badge, history, statement, close
@@ -1538,6 +1566,10 @@ class DB:
             quota = self.get_would_block_totals()
         except sqlite3.Error:
             quota = {"today": 0, "total": 0}
+        try:
+            quota["by_user"] = self.get_would_block_by_user()
+        except sqlite3.Error:
+            quota["by_user"] = []
         return {"sales": sales, "payouts": payouts, "grants": grants, "quota": quota}
 
     def reckoning_csv(self):
@@ -1550,7 +1582,8 @@ class DB:
         section is sales (recorded revenue), commission (the settled base
         plus what each bringer is owed/paid/payable), payouts (payments
         out), grants (credits given) or quota (demo likes the flip would
-        refuse: today + lifetime). Aggregates always render (zeros on
+        refuse: today + lifetime, plus one today/total row pair per user
+        in by_user order so the spreadsheet names the refusers). Aggregates always render (zeros on
         an empty book, never an error); per-currency and per-agent rows
         render only when the book holds them. None renders as an empty
         cell, values are csv-quoted as needed. Whole-book, no filters in
@@ -1602,6 +1635,14 @@ class DB:
         w.writerow(["quota", "would_block_total", "", "",
                     "" if quota.get("total") is None
                     else quota.get("total")])
+        for entry in quota.get("by_user") or []:
+            uid = entry.get("user_id") or ""
+            w.writerow(["quota", "would_block_user_today", uid, "",
+                        "" if entry.get("today") is None
+                        else entry.get("today")])
+            w.writerow(["quota", "would_block_user_total", uid, "",
+                        "" if entry.get("total") is None
+                        else entry.get("total")])
         return buf.getvalue()
 
     def get_spend_history(self, user_id, days=7):
