@@ -397,22 +397,26 @@ class DB:
     def get_spend_by_buyer(self, limit=100):
         """Per-buyer spend vs granted for the owner.
 
-        [{user_id, spent, granted, left}] over the same cash register get_usage()
-        prices: spent = lifetime priced credits consumed (usage likes_in *
-        PRICE_LIKE_IN + inbox_reads * PRICE_READ + inference calls *
-        PRICE_ANALYSIS, the same number /api/usage shows as
-        credits.total), granted = lifetime credits from the grants ledger
-        (the same number /api/usage shows as balance.granted_total),
-        left = granted - spent (the same number /api/usage shows as
-        balance.left_total, negative when the buyer spent free quota —
-        honest, refuses nothing). Biggest spender first (spent desc,
+        [{user_id, spent, granted, left, refused_today, refused_total}]
+        over the same cash register get_usage() prices: spent = lifetime
+        priced credits consumed (usage likes_in * PRICE_LIKE_IN +
+        inbox_reads * PRICE_READ + inference calls * PRICE_ANALYSIS, the
+        same number /api/usage shows as credits.total), granted =
+        lifetime credits from the grants ledger (the same number
+        /api/usage shows as balance.granted_total), left = granted -
+        spent (the same number /api/usage shows as balance.left_total,
+        negative when the buyer spent free quota — honest, refuses
+        nothing), refused_today/refused_total = demo likes the flip
+        would refuse for this buyer from the would_block meter (the same
+        per-user numbers quota.by_user carries, matched by user_id;
+        missing table reads 0). Biggest spender first (spent desc,
         user_id asc for ties), capped at limit (junk reads 100, clamped
-        1..500 like list_codes). Names who is closest to paying once the
-        queued quota flip turns on, next to the refused demand in the
-        one-URL reckoning; left names who runs dry first, the top-up
-        candidates. Read-only, never an error; each table is read on its
-        own so an old book missing one still reports the others, and an
-        empty book reads []."""
+        1..500 like list_codes). One top-up table: who is closest to
+        paying, who runs dry first, and who the flip would refuse, in
+        one row per buyer — no hand join against by_user. Read-only,
+        never an error; each table is read on its own so an old book
+        missing one still reports the others, and an empty book
+        reads []."""
         try:
             limit = max(1, min(500, int(limit)))
         except (TypeError, ValueError):
@@ -440,10 +444,22 @@ class DB:
                 granted[uid] = creds
         except sqlite3.Error:
             pass
+        refused = {}
+        try:
+            for uid, n_today, n_total in self.c.execute(
+                    "SELECT user_id, "
+                    "COALESCE(SUM(CASE WHEN day=? THEN n ELSE 0 END),0), "
+                    "COALESCE(SUM(n),0) FROM would_block "
+                    "GROUP BY user_id", (today(),)).fetchall():
+                refused[uid] = (n_today, n_total)
+        except sqlite3.Error:
+            pass
         rows = [{"user_id": uid, "spent": spent.get(uid, 0),
                  "granted": granted.get(uid, 0),
-                 "left": granted.get(uid, 0) - spent.get(uid, 0)}
-                for uid in set(spent) | set(granted)]
+                 "left": granted.get(uid, 0) - spent.get(uid, 0),
+                 "refused_today": refused.get(uid, (0, 0))[0],
+                 "refused_total": refused.get(uid, (0, 0))[1]}
+                for uid in set(spent) | set(granted) | set(refused)]
         rows.sort(key=lambda r: (-r["spent"], r["user_id"]))
         return rows[:limit]
 
@@ -1598,8 +1614,9 @@ class DB:
         refuse: today + lifetime, so the queued quota decision reads here)
         plus by_user from get_would_block_by_user() (per-buyer refused
         demand, biggest refuser first, capped at 100) plus by_buyer from
-        get_spend_by_buyer() (per-buyer spend vs granted vs left, biggest
-        spender first, capped at 100).
+        get_spend_by_buyer() (per-buyer spend vs granted vs left plus
+        refused demand in the same row, biggest spender first, capped
+        at 100 — the one top-up table, no hand join against by_user).
         in v1; read-only, never an error, empty book reads zeros.
         New totals only: list/get rows, /api/codes, /api/payouts,
         /api/grants, /api/usage, badge, history, statement, close
@@ -1643,9 +1660,10 @@ class DB:
         out), grants (credits given) or quota (demo likes the flip would
         refuse: today + lifetime, plus one today/total row pair per user
         in by_user order so the spreadsheet names the refusers, plus one
-        spent/granted/left row triple per user in by_buyer order so the
-        spreadsheet names who is closest to paying and who runs dry
-        first). Aggregates always render (zeros on
+        spent/granted/left/refused-today/refused-total row quintuple per
+        user in by_buyer order so the spreadsheet names who is closest
+        to paying, who runs dry first and who the flip would refuse).
+        Aggregates always render (zeros on
         an empty book, never an error); per-currency and per-agent rows
         render only when the book holds them. None renders as an empty
         cell, values are csv-quoted as needed. Whole-book, no filters in
@@ -1716,6 +1734,12 @@ class DB:
             w.writerow(["quota", "spend_user_left", uid, "",
                         "" if entry.get("left") is None
                         else entry.get("left")])
+            w.writerow(["quota", "spend_user_refused_today", uid, "",
+                        "" if entry.get("refused_today") is None
+                        else entry.get("refused_today")])
+            w.writerow(["quota", "spend_user_refused_total", uid, "",
+                        "" if entry.get("refused_total") is None
+                        else entry.get("refused_total")])
         return buf.getvalue()
 
     def get_spend_history(self, user_id, days=7):
