@@ -1626,7 +1626,11 @@ class DB:
         refused demand plus needs_topup (no credit left and actually
         used or wanted service — the bill-first queue) in the same row,
         biggest spender first, capped
-        at 100 — the one top-up table, no hand join against by_user).
+        at 100 — the one top-up table, no hand join against by_user)
+        plus needs_topup_n (how many by_buyer rows flag needs_topup —
+        the bill-first headcount, so the queued quota decision reads
+        who to bill first without counting flagged rows; counted over
+        the served by_buyer window, capped at 100 like the table).
         in v1; read-only, never an error, empty book reads zeros.
         New totals only: list/get rows, /api/codes, /api/payouts,
         /api/grants, /api/usage, badge, history, statement, close
@@ -1656,6 +1660,12 @@ class DB:
             quota["by_buyer"] = self.get_spend_by_buyer()
         except sqlite3.Error:
             quota["by_buyer"] = []
+        try:
+            quota["needs_topup_n"] = sum(
+                1 for e in quota.get("by_buyer") or []
+                if isinstance(e, dict) and e.get("needs_topup"))
+        except TypeError:
+            quota["needs_topup_n"] = 0
         return {"sales": sales, "payouts": payouts, "grants": grants, "quota": quota}
 
     def reckoning_csv(self):
@@ -1674,7 +1684,9 @@ class DB:
         user in by_buyer order so the spreadsheet names who is closest
         to paying, who runs dry first and who the flip would refuse,
         plus one spend_user_needs_topup row per user (1 bill-first,
-        0 otherwise) in the same order).
+        0 otherwise) in the same order, plus one needs_topup_buyers
+        aggregate row (the bill-first headcount, same number as
+        quota.needs_topup_n).
         Aggregates always render (zeros on
         an empty book, never an error); per-currency and per-agent rows
         render only when the book holds them. None renders as an empty
@@ -1727,6 +1739,9 @@ class DB:
         w.writerow(["quota", "would_block_total", "", "",
                     "" if quota.get("total") is None
                     else quota.get("total")])
+        w.writerow(["quota", "needs_topup_buyers", "", "",
+                    "" if quota.get("needs_topup_n") is None
+                    else quota.get("needs_topup_n")])
         for entry in quota.get("by_user") or []:
             uid = entry.get("user_id") or ""
             w.writerow(["quota", "would_block_user_today", uid, "",
