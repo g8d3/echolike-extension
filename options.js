@@ -66,6 +66,17 @@ async function pay(s) {
     el.textContent = payText(h.checkout);
   } catch (e) { /* offline inbox: line stays empty, nothing breaks */ }
 }
+function parkText(hasta, n, now) {
+  if (!hasta || (now === undefined ? Date.now() : now) >= hasta) return "";
+  return ((n > 0) ? n + " queued \u00b7 " : "") + "resumes midnight";
+}
+function park(s) {
+  const el = $("msgPark");
+  if (!el) return;
+  el.textContent = "";
+  if (!s) return;
+  el.textContent = parkText(s.quota429hasta || 0, (s.cola || []).length);
+}
 async function redeem() {
   const codeEl = $("redeem_code"), refEl = $("redeem_ref"), msgEl = $("msgRedeem");
   const code = ((codeEl && codeEl.value) || "").trim();
@@ -104,9 +115,10 @@ async function redeem() {
 }
 async function pintar() {
   $("ver").textContent = ext.runtime.getManifest().version;
-  const s = await ext.storage.local.get({ sync: false, datos: [], transport: "direct", inbox_url: "", device_token: "" });
+  const s = await ext.storage.local.get({ sync: false, datos: [], transport: "direct", inbox_url: "", device_token: "", quota429hasta: 0, cola: [] });
   usage(s);
   pay(s);
+  park(s);
   const box = $("boxRedeem");
   if (box) box.style.display = (s.inbox_url && s.device_token) ? "" : "none";
   $("sync").checked = !!s.sync;
