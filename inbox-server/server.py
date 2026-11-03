@@ -700,7 +700,7 @@ class DB:
         return {"payouts": n[0] if n else 0,
                 "paid": {r[0]: round(r[1], 9) for r in rows}}
 
-    def get_statement(self, agent, limit=100, month=None):
+    def get_statement(self, agent, limit=100, month=None, offset=0):
         """Per-bringer payout statement in one read, newest payouts first.
 
         {agent, month, settled, owed, paid, payable, daily, payouts, totals}
@@ -717,8 +717,13 @@ class DB:
         bringer this month'); None, blank or 'all' means every month, a
         malformed month raises ValueError (the route answers 400, the same
         vocabulary as /api/close, /api/codes?month=, /api/payouts?month=
-        and /api/grants?month=). month scopes the payment rows and their
-        totals only; settled, owed, paid, payable and daily stay lifetime
+        and /api/grants?month=). offset is the same optional row skip as
+        list_payouts (localhost GET /api/statement?agent=X&limit=L&offset=O
+        answers 'the next page of this bringer's payments' past the 500-row
+        cap); junk/negative reads as 0, beyond-the-book reads [], totals
+        ignore it (the bringer's whole payment ledger, never the window).
+        month scopes the payment rows and their totals only; settled, owed,
+        paid, payable and daily stay lifetime
         (the settled reckoning for one month is the per-month /api/close).
         Slices of get_sales_totals() plus list_payouts(limit, agent, month)
         plus get_payout_totals(agent, month); no new table, never an error
@@ -727,7 +732,9 @@ class DB:
         empty and zero totals (the HTTP layer refuses them with 400: a
         statement is per-bringer, the full ledger already answers
         everyone). No month keeps the previous rows byte-identical (only
-        the additive month: None echo is new)."""
+        the additive month: None echo is new); no offset keeps them
+        byte-identical too (offset only windows the row list, it is not
+        echoed)."""
         want = agent.strip() if isinstance(agent, str) else ""
         mon = month.strip() if isinstance(month, str) and month.strip() else None
         if isinstance(mon, str) and mon.lower() == "all":
@@ -752,7 +759,7 @@ class DB:
                 "paid": t.get("paid", {}).get(want, {}),
                 "payable": t.get("payable", {}).get(want, {}),
                 "daily": t.get("by_referrer_daily", {}).get(want, []),
-                "payouts": self.list_payouts(limit, want, month),
+                "payouts": self.list_payouts(limit, want, month, offset),
                 "totals": self.get_payout_totals(want, month)}
 
     def payouts_csv(self, limit=100, agent=None, month=None, offset=0):
@@ -779,7 +786,7 @@ class DB:
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
-    def statement_csv(self, agent, limit=100, month=None):
+    def statement_csv(self, agent, limit=100, month=None, offset=0):
         """One bringer's payout rows as CSV, newest first.
 
         One header row plus one row per payment for the owner (localhost
@@ -788,12 +795,16 @@ class DB:
         one-screen statement reconciles in a spreadsheet without touching
         JSON. month is the same optional pay-month filter in YYYY-MM as
         get_statement() (None/blank/'all' = every month, malformed raises
-        ValueError for a 400). None renders as an empty cell, values are
-        csv-quoted as needed. Blank agents render header only (the HTTP
-        layer refuses them with 400: a statement is per-bringer, the full
-        ledger already answers everyone); unknown agents render header
-        only, never an error. Limit clamped 1..500, default 100. New
-        export only: get_statement, list_payouts, /api/statement,
+        ValueError for a 400). offset is the same optional row skip as
+        list_payouts (localhost GET /api/statement.csv?agent=X&offset=O
+        answers 'the next page of this bringer's payments'); junk/negative
+        reads as 0, beyond-the-book reads header only. None renders as an
+        empty cell, values are csv-quoted as needed. Blank agents render
+        header only (the HTTP layer refuses them with 400: a statement is
+        per-bringer, the full ledger already answers everyone); unknown
+        agents render header only, never an error. Limit clamped 1..500,
+        default 100. New export only: get_statement, list_payouts,
+        /api/statement,
         /api/payouts, /api/codes, /api/usage, badge, history and health
         shapes untouched."""
         cols = ("at", "day", "agent", "amount", "currency", "ref")
@@ -803,7 +814,7 @@ class DB:
         want = agent.strip() if isinstance(agent, str) else ""
         if not want:
             return buf.getvalue()
-        for row in self.list_payouts(limit, want, month):
+        for row in self.list_payouts(limit, want, month, offset):
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
@@ -1819,7 +1830,11 @@ def make_handler(db):
                     return self._json({"ok": False, "error": "agent required"}, 400)
                 month = q.get("month", [None])[0]
                 try:
-                    st = db.get_statement(want, limit, month)
+                    offset = max(0, int(q.get("offset", ["0"])[0]))
+                except ValueError:
+                    offset = 0
+                try:
+                    st = db.get_statement(want, limit, month, offset)
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 return self._json({"ok": True, **st})
@@ -1838,7 +1853,11 @@ def make_handler(db):
                     return self._json({"ok": False, "error": "agent required"}, 400)
                 month = q.get("month", [None])[0]
                 try:
-                    b = db.statement_csv(want, limit, month).encode()
+                    offset = max(0, int(q.get("offset", ["0"])[0]))
+                except ValueError:
+                    offset = 0
+                try:
+                    b = db.statement_csv(want, limit, month, offset).encode()
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 self.send_response(200)
