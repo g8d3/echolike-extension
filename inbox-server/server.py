@@ -394,6 +394,54 @@ class DB:
         except sqlite3.Error:
             return []
 
+    def get_spend_by_buyer(self, limit=100):
+        """Per-buyer spend vs granted for the owner.
+
+        [{user_id, spent, granted}] over the same cash register get_usage()
+        prices: spent = lifetime priced credits consumed (usage likes_in *
+        PRICE_LIKE_IN + inbox_reads * PRICE_READ + inference calls *
+        PRICE_ANALYSIS, the same number /api/usage shows as
+        credits.total), granted = lifetime credits from the grants ledger
+        (the same number /api/usage shows as balance.granted_total).
+        Biggest spender first (spent desc, user_id asc for ties), capped at
+        limit (junk reads 100, clamped 1..500 like list_codes). Names who
+        is closest to paying once the queued quota flip turns on, next to
+        the refused demand in the one-URL reckoning. Read-only, never an
+        error; each table is read on its own so an old book missing one
+        still reports the others, and an empty book reads []."""
+        try:
+            limit = max(1, min(500, int(limit)))
+        except (TypeError, ValueError):
+            limit = 100
+        spent, granted = {}, {}
+        try:
+            for uid, lin, rds in self.c.execute(
+                    "SELECT user_id, COALESCE(SUM(likes_in),0), "
+                    "COALESCE(SUM(inbox_reads),0) FROM usage "
+                    "GROUP BY user_id").fetchall():
+                spent[uid] = lin * PRICE_LIKE_IN + rds * PRICE_READ
+        except sqlite3.Error:
+            pass
+        try:
+            for uid, calls in self.c.execute(
+                    "SELECT user_id, COALESCE(SUM(calls),0) FROM inference "
+                    "GROUP BY user_id").fetchall():
+                spent[uid] = spent.get(uid, 0) + calls * PRICE_ANALYSIS
+        except sqlite3.Error:
+            pass
+        try:
+            for uid, creds in self.c.execute(
+                    "SELECT user_id, COALESCE(SUM(credits),0) FROM grants "
+                    "GROUP BY user_id").fetchall():
+                granted[uid] = creds
+        except sqlite3.Error:
+            pass
+        rows = [{"user_id": uid, "spent": spent.get(uid, 0),
+                 "granted": granted.get(uid, 0)}
+                for uid in set(spent) | set(granted)]
+        rows.sort(key=lambda r: (-r["spent"], r["user_id"]))
+        return rows[:limit]
+
     def bump_inference(self, user_id, seconds=0.0, chars=0):
         """One finished muse call for this user. Best-effort: never raises."""
         try:
@@ -1544,7 +1592,9 @@ class DB:
         get_would_block_totals() (demo likes the enforcement flip would
         refuse: today + lifetime, so the queued quota decision reads here)
         plus by_user from get_would_block_by_user() (per-buyer refused
-        demand, biggest refuser first, capped at 100).
+        demand, biggest refuser first, capped at 100) plus by_buyer from
+        get_spend_by_buyer() (per-buyer spend vs granted, biggest spender
+        first, capped at 100).
         in v1; read-only, never an error, empty book reads zeros.
         New totals only: list/get rows, /api/codes, /api/payouts,
         /api/grants, /api/usage, badge, history, statement, close
@@ -1570,6 +1620,10 @@ class DB:
             quota["by_user"] = self.get_would_block_by_user()
         except sqlite3.Error:
             quota["by_user"] = []
+        try:
+            quota["by_buyer"] = self.get_spend_by_buyer()
+        except sqlite3.Error:
+            quota["by_buyer"] = []
         return {"sales": sales, "payouts": payouts, "grants": grants, "quota": quota}
 
     def reckoning_csv(self):
@@ -1583,7 +1637,9 @@ class DB:
         plus what each bringer is owed/paid/payable), payouts (payments
         out), grants (credits given) or quota (demo likes the flip would
         refuse: today + lifetime, plus one today/total row pair per user
-        in by_user order so the spreadsheet names the refusers). Aggregates always render (zeros on
+        in by_user order so the spreadsheet names the refusers, plus one
+        spent/granted row pair per user in by_buyer order so the
+        spreadsheet names who is closest to paying). Aggregates always render (zeros on
         an empty book, never an error); per-currency and per-agent rows
         render only when the book holds them. None renders as an empty
         cell, values are csv-quoted as needed. Whole-book, no filters in
@@ -1643,6 +1699,14 @@ class DB:
             w.writerow(["quota", "would_block_user_total", uid, "",
                         "" if entry.get("total") is None
                         else entry.get("total")])
+        for entry in quota.get("by_buyer") or []:
+            uid = entry.get("user_id") or ""
+            w.writerow(["quota", "spend_user_spent", uid, "",
+                        "" if entry.get("spent") is None
+                        else entry.get("spent")])
+            w.writerow(["quota", "spend_user_granted", uid, "",
+                        "" if entry.get("granted") is None
+                        else entry.get("granted")])
         return buf.getvalue()
 
     def get_spend_history(self, user_id, days=7):
