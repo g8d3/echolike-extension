@@ -20,10 +20,22 @@ function usageText(u) {
     s += " · last grant +" + g.credits + (g.reason ? " " + g.reason : "");
   return s;
 }
+function spentText(h) {
+  if (!Array.isArray(h) || !h.length) return "";
+  let s = 0, g = 0;
+  for (const r of h) {
+    if (r && Number.isFinite(r.spent)) s += r.spent;
+    if (r && Number.isFinite(r.granted)) g += r.granted;
+  }
+  if (s <= 0 && g <= 0) return "";
+  return "Last 7d: " + s + " spent · " + g + " granted";
+}
 async function usage(s) {
   const el = $("msgUsage");
   if (!el) return;
   el.textContent = "";
+  const sp = $("msgSpend");
+  if (sp) sp.textContent = "";
   if (!s.inbox_url || !s.device_token) return;
   try {
     const r = await fetch(s.inbox_url.replace(/\/$/, "") + "/api/usage", { headers: { authorization: "Bearer " + s.device_token } });
@@ -31,7 +43,8 @@ async function usage(s) {
     const u = await r.json();
     if (!u || !u.ok) return;
     el.textContent = usageText(u);
-  } catch (e) { /* offline inbox: line stays empty, nothing breaks */ }
+    if (sp) sp.textContent = spentText(u.history);
+  } catch (e) { /* offline inbox: lines stay empty, nothing breaks */ }
 }
 function payText(c) {
   const sol = (c && c.sol) || "", evm = (c && c.evm) || "";
