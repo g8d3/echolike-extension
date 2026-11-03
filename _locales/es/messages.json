@@ -418,6 +418,9 @@
   "errRedeemExpired": {
     "message": "Ese código venció — pide uno nuevo."
   },
+  "errRedeemRevoked": {
+    "message": "Ese código fue revocado — pide uno nuevo."
+  },
   "errRedeemOldServer": {
     "message": "Ese inbox es muy viejo para códigos: actualiza server.py."
   }

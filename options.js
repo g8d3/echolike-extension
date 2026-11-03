@@ -94,7 +94,8 @@ async function redeem() {
     return;
   }
   const err = String((j && j.error) || "");
-  if (r.status === 409 || /already redeemed/.test(err)) texto(msgEl, t("errRedeemUsed"), false);
+  if (r.status === 409 && /revoked/.test(err)) texto(msgEl, t("errRedeemRevoked"), false);
+  else if (r.status === 409 || /already redeemed/.test(err)) texto(msgEl, t("errRedeemUsed"), false);
   else if (r.status === 401) texto(msgEl, t("errBadToken"), false);
   else if (/not found/.test(err)) texto(msgEl, t("errRedeemOldServer"), false);
   else if (r.status === 404) texto(msgEl, t("errRedeemUnknown"), false);

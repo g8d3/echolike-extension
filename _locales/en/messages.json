@@ -422,6 +422,9 @@
   "errRedeemExpired": {
     "message": "That code has expired — ask for a fresh one."
   },
+  "errRedeemRevoked": {
+    "message": "That code was revoked — ask for a fresh one."
+  },
   "errRedeemOldServer": {
     "message": "That inbox is too old for redeem codes: update server.py."
   }
