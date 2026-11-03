@@ -963,7 +963,7 @@ class DB:
                           else close["commission_pct"]])
         return buf.getvalue()
 
-    def list_codes(self, limit=100, agent=None, state=None, month=None):
+    def list_codes(self, limit=100, agent=None, state=None, month=None, offset=0):
         """Prepaid code inventory, newest first.
 
         Read-only view over grant_codes for the owner (localhost GET
@@ -989,7 +989,17 @@ class DB:
         answers 'which codes entered the book this month' next to the
         per-month /api/close reckoning); None or blank means every month,
         a malformed month raises ValueError (the route answers 400, same
-        vocabulary as /api/close). agent, state and month combine (AND)."""
+        vocabulary as /api/close). agent, state and month combine (AND).
+        offset is an optional row skip for paging past the 500-row cap
+        (localhost GET /api/codes?limit=100&offset=100 answers 'the next
+        page of the same book'); junk/negative reads as 0, beyond-the-book
+        reads [], totals and filtered ignore it (whole filter, never the
+        window)."""
+        try:
+            offset = int(offset)
+        except (TypeError, ValueError):
+            offset = 0
+        offset = max(0, offset)
         try:
             limit = int(limit)
         except (TypeError, ValueError):
@@ -1025,10 +1035,11 @@ class DB:
                 params.append(m)
             where = ("WHERE " + " AND ".join(conds)) if conds else ""
             params.append(limit)
+            params.append(offset)
             rows = self.c.execute(
                 "SELECT code, credits, reason, created_at, redeemed_by, redeemed_at, revoked, expires_at, "
                 "sale_amount, sale_currency, sale_ref, bringer "
-                "FROM grant_codes " + where + " ORDER BY rowid DESC LIMIT ?",
+                "FROM grant_codes " + where + " ORDER BY rowid DESC LIMIT ? OFFSET ?",
                 tuple(params)).fetchall()
         except sqlite3.Error:
             return []
@@ -1041,7 +1052,7 @@ class DB:
                  "sale_ref": r[10] or None,
                  "bringer": r[11] or None} for r in rows]
 
-    def codes_csv(self, limit=100, agent=None, state=None, month=None):
+    def codes_csv(self, limit=100, agent=None, state=None, month=None, offset=0):
         """Sales book as CSV, newest first (same rows as list_codes).
 
         One header row plus one row per code for the owner (localhost GET
@@ -1056,7 +1067,8 @@ class DB:
         same optional redeem-state filter (None/blank/'all' = every code)
         and month the same optional mint-month filter in YYYY-MM
         (None/blank = every month, malformed raises ValueError for a 400).
-        Totals stay
+        offset is the same optional row skip as list_codes (paging past the
+        500-row cap, junk/negative reads as 0). Totals stay
         whole-book by design (see get_sales_totals). New export only: list_codes,
         /api/codes, /api/usage, badge, history and health shapes untouched."""
         cols = ("code", "credits", "reason", "created_at", "redeemed_by",
@@ -1065,7 +1077,7 @@ class DB:
         buf = io.StringIO(newline="")
         w = csv.writer(buf)
         w.writerow(cols)
-        for row in self.list_codes(limit, agent, state, month):
+        for row in self.list_codes(limit, agent, state, month, offset):
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
@@ -1600,6 +1612,10 @@ def make_handler(db):
                     limit = max(1, min(500, int(q.get("limit", ["100"])[0])))
                 except ValueError:
                     limit = 100
+                try:
+                    offset = max(0, int(q.get("offset", ["0"])[0]))
+                except ValueError:
+                    offset = 0
                 agent = q.get("agent", [None])[0]
                 want = agent.strip() if isinstance(agent, str) and agent.strip() else None
                 state = q.get("state", [None])[0]
@@ -1611,7 +1627,7 @@ def make_handler(db):
                 if mo is not None and mo.lower() == "all":
                     mo = None
                 try:
-                    codes = db.list_codes(limit, want, st, mo)
+                    codes = db.list_codes(limit, want, st, mo, offset)
                     filtered = db.get_filtered_sales_totals(want, st, mo)
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
@@ -1630,6 +1646,10 @@ def make_handler(db):
                     limit = max(1, min(500, int(q.get("limit", ["100"])[0])))
                 except ValueError:
                     limit = 100
+                try:
+                    offset = max(0, int(q.get("offset", ["0"])[0]))
+                except ValueError:
+                    offset = 0
                 agent = q.get("agent", [None])[0]
                 want = agent.strip() if isinstance(agent, str) and agent.strip() else None
                 state = q.get("state", [None])[0]
@@ -1641,7 +1661,7 @@ def make_handler(db):
                 if mo is not None and mo.lower() == "all":
                     mo = None
                 try:
-                    b = db.codes_csv(limit, want, st, mo).encode()
+                    b = db.codes_csv(limit, want, st, mo, offset).encode()
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 self.send_response(200)
