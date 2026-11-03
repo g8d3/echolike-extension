@@ -1465,6 +1465,35 @@ class DB:
             return {"grants": 0, "credits": 0}
         return {"grants": row[0] if row else 0, "credits": row[1] if row else 0}
 
+    def get_reckoning(self):
+        """Whole cash register in one read, newest shape additive only.
+
+        {sales, payouts, grants}: the three whole-book totals side by side
+        for the owner (localhost GET /api/reckoning serves it as one JSON,
+        so the month-end /api/close plus the three ledgers reconcile
+        without three calls): sales is get_sales_totals() (recorded
+        revenue, settled base, owed/paid/payable), payouts is
+        get_payout_totals() (off-band payments out), grants is
+        get_grant_totals() (credits given out). Whole-book, no filters
+        in v1; read-only, never an error, empty book reads zeros.
+        New totals only: list/get rows, /api/codes, /api/payouts,
+        /api/grants, /api/usage, badge, history, statement, close
+        and health shapes untouched."""
+        try:
+            sales = self.get_sales_totals()
+        except sqlite3.Error:
+            sales = {"codes": 0, "redeemed": 0, "revoked": 0,
+                     "outstanding": 0, "with_sale": 0, "sales": {}}
+        try:
+            payouts = self.get_payout_totals()
+        except sqlite3.Error:
+            payouts = {"payouts": 0, "paid": {}}
+        try:
+            grants = self.get_grant_totals()
+        except sqlite3.Error:
+            grants = {"grants": 0, "credits": 0}
+        return {"sales": sales, "payouts": payouts, "grants": grants}
+
     def get_spend_history(self, user_id, days=7):
         """Per-day spend off the same cash register, newest first: [{day, spent, granted}].
 
@@ -1900,6 +1929,11 @@ def make_handler(db):
                 self.end_headers()
                 self.wfile.write(b)
                 return
+            if u.path == "/api/reckoning":
+                peer = (self.client_address[0] if self.client_address else "")
+                if peer not in ("127.0.0.1", "::1"):
+                    return self._json({"ok": False, "error": "reckoning only from this machine"}, 403)
+                return self._json({"ok": True, **db.get_reckoning()})
             if u.path == "/" or u.path == "/index.html":
                 items = ""
                 try:
