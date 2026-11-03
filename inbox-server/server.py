@@ -397,7 +397,8 @@ class DB:
     def get_spend_by_buyer(self, limit=100):
         """Per-buyer spend vs granted for the owner.
 
-        [{user_id, spent, granted, left, refused_today, refused_total}]
+        [{user_id, spent, granted, left, refused_today, refused_total,
+          needs_topup}]
         over the same cash register get_usage() prices: spent = lifetime
         priced credits consumed (usage likes_in * PRICE_LIKE_IN +
         inbox_reads * PRICE_READ + inference calls * PRICE_ANALYSIS, the
@@ -409,7 +410,11 @@ class DB:
         nothing), refused_today/refused_total = demo likes the flip
         would refuse for this buyer from the would_block meter (the same
         per-user numbers quota.by_user carries, matched by user_id;
-        missing table reads 0). Biggest spender first (spent desc,
+        missing table reads 0), needs_topup = this buyer has no credit
+        left and actually used or wanted service (left <= 0 and
+        (spent > 0 or refused_total > 0) — virgin 0/0/0 rows never
+        flag, so the owner reads the bill-first queue without
+        threshold math). Biggest spender first (spent desc,
         user_id asc for ties), capped at limit (junk reads 100, clamped
         1..500 like list_codes). One top-up table: who is closest to
         paying, who runs dry first, and who the flip would refuse, in
@@ -454,12 +459,15 @@ class DB:
                 refused[uid] = (n_today, n_total)
         except sqlite3.Error:
             pass
-        rows = [{"user_id": uid, "spent": spent.get(uid, 0),
-                 "granted": granted.get(uid, 0),
-                 "left": granted.get(uid, 0) - spent.get(uid, 0),
-                 "refused_today": refused.get(uid, (0, 0))[0],
-                 "refused_total": refused.get(uid, (0, 0))[1]}
-                for uid in set(spent) | set(granted) | set(refused)]
+        rows = []
+        for uid in set(spent) | set(granted) | set(refused):
+            sv, gv = spent.get(uid, 0), granted.get(uid, 0)
+            left = gv - sv
+            rt = refused.get(uid, (0, 0))
+            rows.append({"user_id": uid, "spent": sv, "granted": gv,
+                         "left": left,
+                         "refused_today": rt[0], "refused_total": rt[1],
+                         "needs_topup": bool(left <= 0 and (sv > 0 or rt[1] > 0))})
         rows.sort(key=lambda r: (-r["spent"], r["user_id"]))
         return rows[:limit]
 
@@ -1615,7 +1623,9 @@ class DB:
         plus by_user from get_would_block_by_user() (per-buyer refused
         demand, biggest refuser first, capped at 100) plus by_buyer from
         get_spend_by_buyer() (per-buyer spend vs granted vs left plus
-        refused demand in the same row, biggest spender first, capped
+        refused demand plus needs_topup (no credit left and actually
+        used or wanted service — the bill-first queue) in the same row,
+        biggest spender first, capped
         at 100 — the one top-up table, no hand join against by_user).
         in v1; read-only, never an error, empty book reads zeros.
         New totals only: list/get rows, /api/codes, /api/payouts,
@@ -1662,7 +1672,9 @@ class DB:
         in by_user order so the spreadsheet names the refusers, plus one
         spent/granted/left/refused-today/refused-total row quintuple per
         user in by_buyer order so the spreadsheet names who is closest
-        to paying, who runs dry first and who the flip would refuse).
+        to paying, who runs dry first and who the flip would refuse,
+        plus one spend_user_needs_topup row per user (1 bill-first,
+        0 otherwise) in the same order).
         Aggregates always render (zeros on
         an empty book, never an error); per-currency and per-agent rows
         render only when the book holds them. None renders as an empty
@@ -1740,6 +1752,9 @@ class DB:
             w.writerow(["quota", "spend_user_refused_total", uid, "",
                         "" if entry.get("refused_total") is None
                         else entry.get("refused_total")])
+            w.writerow(["quota", "spend_user_needs_topup", uid, "",
+                        "" if entry.get("needs_topup") is None
+                        else (1 if entry.get("needs_topup") else 0)])
         return buf.getvalue()
 
     def get_spend_history(self, user_id, days=7):
