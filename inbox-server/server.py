@@ -354,6 +354,20 @@ class DB:
         row = self.c.execute("SELECT n FROM would_block WHERE day=? AND user_id=?", (today(), user_id)).fetchone()
         return row[0] if row else 0
 
+    def get_would_block_totals(self):
+        """Demo demand the enforcement flip would refuse, whole-book.
+
+        {today, total}: likes counted into the would_block meter across all
+        users (today = this UTC day, total = lifetime), so the owner's
+        one-URL reckoning carries the flip's blast radius next to the money.
+        Read-only, never an error, old books without the table read zeros."""
+        try:
+            t = self.c.execute("SELECT COALESCE(SUM(n),0) FROM would_block WHERE day=?", (today(),)).fetchone()
+            a = self.c.execute("SELECT COALESCE(SUM(n),0) FROM would_block").fetchone()
+            return {"today": t[0] if t else 0, "total": a[0] if a else 0}
+        except sqlite3.Error:
+            return {"today": 0, "total": 0}
+
     def bump_inference(self, user_id, seconds=0.0, chars=0):
         """One finished muse call for this user. Best-effort: never raises."""
         try:
@@ -1494,13 +1508,15 @@ class DB:
     def get_reckoning(self):
         """Whole cash register in one read, newest shape additive only.
 
-        {sales, payouts, grants}: the three whole-book totals side by side
+        {sales, payouts, grants, quota}: the three whole-book totals side by side
         for the owner (localhost GET /api/reckoning serves it as one JSON,
         so the month-end /api/close plus the three ledgers reconcile
         without three calls): sales is get_sales_totals() (recorded
         revenue, settled base, owed/paid/payable), payouts is
         get_payout_totals() (off-band payments out), grants is
-        get_grant_totals() (credits given out). Whole-book, no filters
+        get_grant_totals() (credits given out), quota is
+        get_would_block_totals() (demo likes the enforcement flip would
+        refuse: today + lifetime, so the queued quota decision reads here).
         in v1; read-only, never an error, empty book reads zeros.
         New totals only: list/get rows, /api/codes, /api/payouts,
         /api/grants, /api/usage, badge, history, statement, close
@@ -1518,7 +1534,11 @@ class DB:
             grants = self.get_grant_totals()
         except sqlite3.Error:
             grants = {"grants": 0, "credits": 0}
-        return {"sales": sales, "payouts": payouts, "grants": grants}
+        try:
+            quota = self.get_would_block_totals()
+        except sqlite3.Error:
+            quota = {"today": 0, "total": 0}
+        return {"sales": sales, "payouts": payouts, "grants": grants, "quota": quota}
 
     def reckoning_csv(self):
         """Whole cash register as CSV, one summary row per figure.
@@ -1529,7 +1549,8 @@ class DB:
         reckoning reconciles in a spreadsheet without touching JSON.
         section is sales (recorded revenue), commission (the settled base
         plus what each bringer is owed/paid/payable), payouts (payments
-        out) or grants (credits given). Aggregates always render (zeros on
+        out), grants (credits given) or quota (demo likes the flip would
+        refuse: today + lifetime). Aggregates always render (zeros on
         an empty book, never an error); per-currency and per-agent rows
         render only when the book holds them. None renders as an empty
         cell, values are csv-quoted as needed. Whole-book, no filters in
@@ -1543,7 +1564,7 @@ class DB:
         try:
             r = self.get_reckoning()
         except sqlite3.Error:
-            r = {"sales": {}, "payouts": {}, "grants": {}}
+            r = {"sales": {}, "payouts": {}, "grants": {}, "quota": {}}
         sales = r.get("sales") or {}
         for metric in ("codes", "redeemed", "revoked", "outstanding",
                        "with_sale"):
@@ -1574,6 +1595,13 @@ class DB:
         w.writerow(["grants", "credits", "", "",
                     "" if grants.get("credits") is None
                     else grants.get("credits")])
+        quota = r.get("quota") or {}
+        w.writerow(["quota", "would_block_today", "", "",
+                    "" if quota.get("today") is None
+                    else quota.get("today")])
+        w.writerow(["quota", "would_block_total", "", "",
+                    "" if quota.get("total") is None
+                    else quota.get("total")])
         return buf.getvalue()
 
     def get_spend_history(self, user_id, days=7):
