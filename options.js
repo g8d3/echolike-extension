@@ -98,6 +98,7 @@ async function redeem() {
   else if (r.status === 401) texto(msgEl, t("errBadToken"), false);
   else if (/not found/.test(err)) texto(msgEl, t("errRedeemOldServer"), false);
   else if (r.status === 404) texto(msgEl, t("errRedeemUnknown"), false);
+  else if (r.status === 410 || /expired/.test(err)) texto(msgEl, t("errRedeemExpired"), false);
   else texto(msgEl, err || t("stateError"), false);
 }
 async function pintar() {

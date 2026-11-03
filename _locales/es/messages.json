@@ -415,6 +415,9 @@
   "errRedeemUnknown": {
     "message": "Código desconocido — revísalo e inténtalo de nuevo."
   },
+  "errRedeemExpired": {
+    "message": "Ese código venció — pide uno nuevo."
+  },
   "errRedeemOldServer": {
     "message": "Ese inbox es muy viejo para códigos: actualiza server.py."
   }

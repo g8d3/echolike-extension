@@ -419,6 +419,9 @@
   "errRedeemUnknown": {
     "message": "Unknown code — check it and try again."
   },
+  "errRedeemExpired": {
+    "message": "That code has expired — ask for a fresh one."
+  },
   "errRedeemOldServer": {
     "message": "That inbox is too old for redeem codes: update server.py."
   }
