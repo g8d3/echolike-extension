@@ -594,7 +594,7 @@ class DB:
         return {a: {k: round(v, 9) for k, v in sorted(cur.items())}
                 for a, cur in sorted(out.items())}
 
-    def list_payouts(self, limit=100, agent=None, month=None):
+    def list_payouts(self, limit=100, agent=None, month=None, offset=0):
         """Off-band payout ledger, newest first, read-only.
 
         [{at, day, agent, amount, currency, ref}] over the payouts table
@@ -611,7 +611,16 @@ class DB:
         this month' next to the per-month /api/close reckoning); None,
         blank or 'all' means every month, a malformed month raises
         ValueError (the route answers 400, same vocabulary as /api/close
-        and /api/codes?month=). agent and month combine (AND)."""
+        and /api/codes?month=). agent and month combine (AND). offset
+        is an optional row skip for paging past the 500-row cap
+        (localhost GET /api/payouts?limit=100&offset=100 answers 'the next
+        page of the same ledger'); junk/negative reads as 0, beyond-the-book
+        reads [], totals ignore it (whole filter, never the window)."""
+        try:
+            offset = int(offset)
+        except (TypeError, ValueError):
+            offset = 0
+        offset = max(0, offset)
         try:
             limit = int(limit)
         except (TypeError, ValueError):
@@ -636,9 +645,10 @@ class DB:
                 params.append(m)
             where = ("WHERE " + " AND ".join(conds)) if conds else ""
             params.append(limit)
+            params.append(offset)
             rows = self.c.execute(
                 "SELECT at, day, agent, amount, currency, ref "
-                "FROM payouts " + where + " ORDER BY rowid DESC LIMIT ?",
+                "FROM payouts " + where + " ORDER BY rowid DESC LIMIT ? OFFSET ?",
                 tuple(params)).fetchall()
         except sqlite3.Error:
             return []
@@ -745,7 +755,7 @@ class DB:
                 "payouts": self.list_payouts(limit, want, month),
                 "totals": self.get_payout_totals(want, month)}
 
-    def payouts_csv(self, limit=100, agent=None, month=None):
+    def payouts_csv(self, limit=100, agent=None, month=None, offset=0):
         """Payout ledger as CSV, newest first (same rows as list_payouts).
 
         One header row plus one row per payment for the owner (localhost
@@ -755,7 +765,9 @@ class DB:
         JSON. agent is the same optional exact-match filter as list_payouts
         (None/blank = every bringer) and month the same optional pay-month
         filter in YYYY-MM (None/blank/'all' = every month, malformed raises
-        ValueError for a 400). Read-only, never an error (empty
+        ValueError for a 400). offset is the same optional row skip as
+        list_payouts (paging past the 500-row cap, junk/negative reads as
+        0). Read-only, never an error (empty
         ledger is header only). Limit clamped 1..500, default 100. New
         export only: list_payouts, /api/payouts, /api/codes, /api/usage,
         badge, history and health shapes untouched."""
@@ -763,7 +775,7 @@ class DB:
         buf = io.StringIO(newline="")
         w = csv.writer(buf)
         w.writerow(cols)
-        for row in self.list_payouts(limit, agent, month):
+        for row in self.list_payouts(limit, agent, month, offset):
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
@@ -1679,11 +1691,15 @@ def make_handler(db):
                     limit = max(1, min(500, int(q.get("limit", ["100"])[0])))
                 except ValueError:
                     limit = 100
+                try:
+                    offset = max(0, int(q.get("offset", ["0"])[0]))
+                except ValueError:
+                    offset = 0
                 agent = q.get("agent", [None])[0]
                 want = agent.strip() if isinstance(agent, str) and agent.strip() else None
                 month = q.get("month", [None])[0]
                 try:
-                    rows = db.list_payouts(limit, want, month)
+                    rows = db.list_payouts(limit, want, month, offset)
                     totals = db.get_payout_totals(want, month)
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
@@ -1704,11 +1720,15 @@ def make_handler(db):
                     limit = max(1, min(500, int(q.get("limit", ["100"])[0])))
                 except ValueError:
                     limit = 100
+                try:
+                    offset = max(0, int(q.get("offset", ["0"])[0]))
+                except ValueError:
+                    offset = 0
                 agent = q.get("agent", [None])[0]
                 want = agent.strip() if isinstance(agent, str) and agent.strip() else None
                 month = q.get("month", [None])[0]
                 try:
-                    b = db.payouts_csv(limit, want, month).encode()
+                    b = db.payouts_csv(limit, want, month, offset).encode()
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 self.send_response(200)
