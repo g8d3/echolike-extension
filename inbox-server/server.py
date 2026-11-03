@@ -1324,7 +1324,7 @@ class DB:
             return []
         return [{"day": r[0], "credits": r[1], "reason": r[2]} for r in rows]
 
-    def list_grants(self, limit=100, user=None, month=None):
+    def list_grants(self, limit=100, user=None, month=None, offset=0):
         """Manual-grant ledger for the owner, newest first, read-only.
 
         [{at, day, user_id, credits, reason}] over the grants table for the
@@ -1343,7 +1343,16 @@ class DB:
         the per-month /api/close reckoning); None, blank or 'all' means
         every month, a malformed month raises ValueError (the route answers
         400, same vocabulary as /api/close, /api/codes?month= and
-        /api/payouts?month=). user and month combine (AND)."""
+        /api/payouts?month=). user and month combine (AND). offset
+        is an optional row skip for paging past the 500-row cap
+        (localhost GET /api/grants?limit=100&offset=100 answers 'the next
+        page of the same ledger'); junk/negative reads as 0, beyond-the-book
+        reads [], totals ignore it (whole filter, never the window)."""
+        try:
+            offset = int(offset)
+        except (TypeError, ValueError):
+            offset = 0
+        offset = max(0, offset)
         try:
             limit = int(limit)
         except (TypeError, ValueError):
@@ -1368,16 +1377,17 @@ class DB:
                 params.append(m)
             where = ("WHERE " + " AND ".join(conds)) if conds else ""
             params.append(limit)
+            params.append(offset)
             rows = self.c.execute(
                 "SELECT at, day, user_id, credits, reason "
-                "FROM grants " + where + " ORDER BY id DESC LIMIT ?",
+                "FROM grants " + where + " ORDER BY id DESC LIMIT ? OFFSET ?",
                 tuple(params)).fetchall()
         except sqlite3.Error:
             return []
         return [{"at": r[0], "day": r[1], "user_id": r[2],
                  "credits": r[3], "reason": r[4] or ""} for r in rows]
 
-    def grants_csv(self, limit=100, user=None, month=None):
+    def grants_csv(self, limit=100, user=None, month=None, offset=0):
         """Manual-grant ledger as CSV, newest first (same rows as list_grants).
 
         One header row plus one row per manual grant for the owner
@@ -1390,7 +1400,9 @@ class DB:
         (None/blank = every user, unknown users header only, never an
         error) and month the same optional grant-month filter in YYYY-MM
         (None/blank/'all' = every month, malformed raises ValueError for
-        a 400). Limit clamped 1..500, default 100. New export only:
+        a 400). Limit clamped 1..500, default 100. offset is the same
+        optional row skip as list_grants (paging past the 500-row cap).
+        New export only:
         list_grants, /api/grants, grant recording, redeem, /api/usage,
         badge, history, codes, sales totals, payouts, statement, close
         and health shapes untouched."""
@@ -1398,7 +1410,7 @@ class DB:
         buf = io.StringIO(newline="")
         w = csv.writer(buf)
         w.writerow(cols)
-        for row in self.list_grants(limit, user, month):
+        for row in self.list_grants(limit, user, month, offset):
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
@@ -1750,7 +1762,11 @@ def make_handler(db):
                 want = user.strip() if isinstance(user, str) and user.strip() else None
                 month = q.get("month", [None])[0]
                 try:
-                    rows = db.list_grants(limit, want, month)
+                    offset = max(0, int(q.get("offset", ["0"])[0]))
+                except ValueError:
+                    offset = 0
+                try:
+                    rows = db.list_grants(limit, want, month, offset)
                     totals = db.get_grant_totals(want, month)
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
@@ -1775,7 +1791,11 @@ def make_handler(db):
                 want = user.strip() if isinstance(user, str) and user.strip() else None
                 month = q.get("month", [None])[0]
                 try:
-                    b = db.grants_csv(limit, want, month).encode()
+                    offset = max(0, int(q.get("offset", ["0"])[0]))
+                except ValueError:
+                    offset = 0
+                try:
+                    b = db.grants_csv(limit, want, month, offset).encode()
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 self.send_response(200)
