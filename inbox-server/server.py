@@ -1496,11 +1496,16 @@ class DB:
             return []
 
     def quota_left(self, user_id):
-        """Billable units the user may still store today. Infinite when not enforcing."""
+        """Priced credit-units the user may still store today. None when not enforcing.
+
+        The same number /api/usage shows as quota.left_today, so the gate
+        refuses exactly when the badge reads 0: likes_in * PRICE_LIKE_IN +
+        inbox_reads * PRICE_READ + inference calls * PRICE_ANALYSIS against
+        FREE_DAILY. (Before: raw likes_in count, which let priced batches
+        through whenever a price differed from 1.)"""
         if not ENFORCE_QUOTA:
             return None
-        row = self.c.execute("SELECT likes_in FROM usage WHERE day=? AND user_id=?", (today(), user_id)).fetchone()
-        return max(0, FREE_DAILY - (row[0] if row else 0))
+        return self.get_usage(user_id)["quota"]["left_today"]
 
     def notify_pipeline(self):
         """Fire-and-forget: the ingest script is idempotent, so a double call is harmless."""
@@ -2102,7 +2107,7 @@ def make_handler(db):
             if not db.check_cap(dev, len(items)):
                 return self._json({"ok": False, "error": "daily cap"}, 429)
             left = db.quota_left(db.user_of_device(dev))
-            if left is not None and len(items) > left:
+            if left is not None and len(items) * PRICE_LIKE_IN > left:
                 return self._json({"ok": False, "error": "quota_exceeded",
                                    "hint": "free daily quota spent; demo-only, raise ECHO_FREE_DAILY or unset ECHO_ENFORCE_QUOTA",
                                    "quota": {"free_daily": FREE_DAILY, "left_today": left}}, 429)
