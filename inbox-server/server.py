@@ -1494,6 +1494,62 @@ class DB:
             grants = {"grants": 0, "credits": 0}
         return {"sales": sales, "payouts": payouts, "grants": grants}
 
+    def reckoning_csv(self):
+        """Whole cash register as CSV, one summary row per figure.
+
+        One header row plus one row per figure for the owner (localhost
+        GET /api/reckoning.csv): section,metric,agent,currency,value \u2014 the
+        same numbers get_reckoning() serves as JSON, so the one-URL
+        reckoning reconciles in a spreadsheet without touching JSON.
+        section is sales (recorded revenue), commission (the settled base
+        plus what each bringer is owed/paid/payable), payouts (payments
+        out) or grants (credits given). Aggregates always render (zeros on
+        an empty book, never an error); per-currency and per-agent rows
+        render only when the book holds them. None renders as an empty
+        cell, values are csv-quoted as needed. Whole-book, no filters in
+        v1; read-only. New export only: get_reckoning, /api/reckoning,
+        rows, totals, /api/usage, badge, history, statement, close and
+        health shapes untouched."""
+        cols = ("section", "metric", "agent", "currency", "value")
+        buf = io.StringIO(newline="")
+        w = csv.writer(buf)
+        w.writerow(cols)
+        try:
+            r = self.get_reckoning()
+        except sqlite3.Error:
+            r = {"sales": {}, "payouts": {}, "grants": {}}
+        sales = r.get("sales") or {}
+        for metric in ("codes", "redeemed", "revoked", "outstanding",
+                       "with_sale"):
+            v = sales.get(metric)
+            w.writerow(["sales", metric, "", "", "" if v is None else v])
+        for cur, amt in sorted((sales.get("sales") or {}).items()):
+            w.writerow(["sales", "recorded", "", cur,
+                        "" if amt is None else amt])
+        for section_metric, key in (("settled", "by_referrer"),
+                                    ("owed", "owed"),
+                                    ("paid", "paid"),
+                                    ("payable", "payable")):
+            for agent, curs in sorted((sales.get(key) or {}).items()):
+                for cur, amt in sorted(curs.items()):
+                    w.writerow(["commission", section_metric, agent, cur,
+                                "" if amt is None else amt])
+        payouts = r.get("payouts") or {}
+        w.writerow(["payouts", "payments", "", "",
+                    "" if payouts.get("payouts") is None
+                    else payouts.get("payouts")])
+        for cur, amt in sorted((payouts.get("paid") or {}).items()):
+            w.writerow(["payouts", "paid", "", cur,
+                        "" if amt is None else amt])
+        grants = r.get("grants") or {}
+        w.writerow(["grants", "grants", "", "",
+                    "" if grants.get("grants") is None
+                    else grants.get("grants")])
+        w.writerow(["grants", "credits", "", "",
+                    "" if grants.get("credits") is None
+                    else grants.get("credits")])
+        return buf.getvalue()
+
     def get_spend_history(self, user_id, days=7):
         """Per-day spend off the same cash register, newest first: [{day, spent, granted}].
 
@@ -1934,6 +1990,17 @@ def make_handler(db):
                 if peer not in ("127.0.0.1", "::1"):
                     return self._json({"ok": False, "error": "reckoning only from this machine"}, 403)
                 return self._json({"ok": True, **db.get_reckoning()})
+            if u.path == "/api/reckoning.csv":
+                peer = (self.client_address[0] if self.client_address else "")
+                if peer not in ("127.0.0.1", "::1"):
+                    return self._json({"ok": False, "error": "reckoning only from this machine"}, 403)
+                b = db.reckoning_csv().encode()
+                self.send_response(200)
+                self.send_header("content-type", "text/csv; charset=utf-8")
+                self.send_header("content-length", str(len(b)))
+                self.end_headers()
+                self.wfile.write(b)
+                return
             if u.path == "/" or u.path == "/index.html":
                 items = ""
                 try:
