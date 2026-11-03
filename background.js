@@ -135,7 +135,7 @@ async function publicarDirecto(items, c) { // batch POST; confirmation arrives i
     try { body = await r.text(); } catch (e) {}
     let quota = false;
     try { quota = (JSON.parse(body) || {}).error === "quota_exceeded"; } catch (e) {}
-    if (quota) throw new Error(t("errQuotaSpent"));
+    if (quota) { const e = new Error(t("errQuotaSpent")); e.code = "quota_spent"; throw e; }
     throw new Error("inbox HTTP 429");
   }
   if (!r.ok) throw new Error("inbox HTTP " + r.status + " " + (await r.text()).slice(0, 120));
@@ -205,18 +205,27 @@ async function vaciarLegacy(cola) { // ntfy path, unchanged from 2.7
   }
   return res;
 }
+function proximaMedianoche() { const d = new Date(); d.setHours(24, 0, 0, 0); return d.getTime(); } // local midnight: the priced quota resets daily
 async function vaciarDirecto(cola) { // Worker path: one batch POST, received in the same response
   const c = await cfgDirect();
   if (c.error) { for (const it of cola) await anotar(it, "error", c.error); return { ok: false, error: c.error }; }
+  const { quota429hasta, quota429msg } = await ext.storage.local.get({ quota429hasta: 0, quota429msg: "" });
+  if (Date.now() < (quota429hasta || 0)) return { ok: false, error: quota429msg || t("errQuotaSpent"), fallback: false }; // parked: quota resets at midnight, no fetch, no retries
   try {
     const ok = await publicarDirecto(cola, c);
     for (const it of [...cola]) {
       if (ok.has(it.id + "|" + it.kind)) { await anotar(it, "recibido"); cola.shift(); }
       else { await anotar(it, "error", "inbox skipped item"); it.intentos = (it.intentos || 0) + 1; if (it.intentos >= 30) cola.shift(); break; }
     }
+    await ext.storage.local.set({ quota429hasta: 0, quota429msg: "" });
     return { ok: true };
   } catch (e) {
-    const msg = String(e.message || e);
+    const msg = String((e && e.message) || e);
+    if ((e && e.code) === "quota_spent") { // priced quota spent: park until local midnight, keep the queue for tomorrow
+      for (const it of cola) await anotar(it, "error", msg);
+      await ext.storage.local.set({ quota429hasta: proximaMedianoche(), quota429msg: msg.slice(0, 160) });
+      return { ok: false, error: msg, fallback: false };
+    }
     for (const it of cola) { it.intentos = (it.intentos || 0) + 1; await anotar(it, "error", msg); }
     while (cola.length && (cola[0].intentos || 0) >= 30) cola.shift();
     return { ok: false, error: msg, fallback: /inbox HTTP (429|5\d\d)/.test(msg) || /Failed to fetch|NetworkError/.test(msg) };
