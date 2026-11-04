@@ -214,6 +214,28 @@ def parse_code(v):
     return s[:200] if s else None
 
 
+def parse_min_sale(v):
+    """Minimum-sale filter for the sales book: float or None.
+
+    A positive number keeps only codes whose recorded sale_amount is at
+    least that much (localhost GET /api/codes?min_sale=50 answers 'which
+    paid codes brought at least 50' when the owner ranks buyers by money
+    instead of granted credits); None = every code. Codes minted
+    without a recorded sale carry NULL and never match a floor (same as
+    the currency filter). Accepts real ints/floats for direct DB calls;
+    blank/junk/zero/negative reads as None (every code), never an
+    error."""
+    if isinstance(v, bool):
+        return None
+    if v is None:
+        return None
+    try:
+        n = float(v.strip() if isinstance(v, str) else v)
+    except (TypeError, ValueError, AttributeError):
+        return None
+    return n if n > 0 else None
+
+
 def is_private(ip):
     """LAN, Tailscale and loopback: places where getting in already means trust."""
     try:
@@ -1307,7 +1329,7 @@ class DB:
                           else close["commission_pct"]])
         return buf.getvalue()
 
-    def list_codes(self, limit=100, agent=None, state=None, month=None, offset=0, bound_to=None, bound_only=False, redeemed_by=None, settled_month=None, currency=None, has_sale=None, min_credits=None, max_credits=None, reason=None, expired=None, sale_ref=None, expires_month=None, code=None):
+    def list_codes(self, limit=100, agent=None, state=None, month=None, offset=0, bound_to=None, bound_only=False, redeemed_by=None, settled_month=None, currency=None, has_sale=None, min_credits=None, max_credits=None, reason=None, expired=None, sale_ref=None, expires_month=None, code=None, min_sale=None):
         """Prepaid code inventory, newest first.
 
         Read-only view over grant_codes for the owner (localhost GET
@@ -1406,9 +1428,16 @@ class DB:
         is this' when support hears a pasted prefix and needs the row
         without grepping the full book); matched case-insensitively as
         a substring, None/blank = every code.
+        min_sale is an optional floor on the recorded sale_amount
+        (localhost GET /api/codes?min_sale=50 answers 'which paid codes
+        brought at least 50' when the owner ranks buyers by money
+        instead of granted credits); a positive number keeps
+        sale_amount>=N, codes minted without a recorded sale never
+        match, blank/junk/zero/negative means every code.
         agent, state, month, settled_month, expires_month, bound_to,
         bound_only, redeemed_by, currency, has_sale, min_credits,
-        max_credits, reason, expired, sale_ref and code combine (AND).
+        max_credits, reason, expired, sale_ref, code and min_sale
+        combine (AND).
         offset is an optional row skip for paging past the 500-row cap
         (localhost GET /api/codes?limit=100&offset=100 answers 'the next
         page of the same book'); junk/negative reads as 0, beyond-the-book
@@ -1437,6 +1466,7 @@ class DB:
         want_exp = parse_expired(expired)
         want_ref = parse_sale_ref(sale_ref)
         want_code = parse_code(code)
+        want_msale = parse_min_sale(min_sale)
         now = utcnow()
         ssm = None
         if isinstance(settled_month, str) and settled_month.strip().lower() == "all":
@@ -1521,6 +1551,9 @@ class DB:
             if want_code is not None:
                 conds.append("INSTR(lower(code), lower(?))>0")
                 params.append(want_code)
+            if want_msale is not None:
+                conds.append("sale_amount>=?")
+                params.append(want_msale)
             where = ("WHERE " + " AND ".join(conds)) if conds else ""
             params.append(limit)
             params.append(offset)
@@ -1541,7 +1574,7 @@ class DB:
                  "bringer": r[11] or None,
                  "bound_to": r[12] or None} for r in rows]
 
-    def codes_csv(self, limit=100, agent=None, state=None, month=None, offset=0, bound_to=None, bound_only=False, redeemed_by=None, settled_month=None, currency=None, has_sale=None, min_credits=None, max_credits=None, reason=None, expired=None, sale_ref=None, expires_month=None, code=None):
+    def codes_csv(self, limit=100, agent=None, state=None, month=None, offset=0, bound_to=None, bound_only=False, redeemed_by=None, settled_month=None, currency=None, has_sale=None, min_credits=None, max_credits=None, reason=None, expired=None, sale_ref=None, expires_month=None, code=None, min_sale=None):
         """Sales book as CSV, newest first (same rows as list_codes).
 
         One header row plus one row per code for the owner (localhost GET
@@ -1586,6 +1619,9 @@ class DB:
         code is the same optional code-substring filter on the minted
         code itself (None/blank = every code, matched
         case-insensitively).
+        min_sale is the same optional floor on the recorded sale_amount
+        (positive number keeps sale_amount>=N, codes without a recorded
+        sale never match, anything else = every code).
         offset is the same optional row skip as list_codes (paging past the
         500-row cap, junk/negative reads as 0). Totals stay
         whole-book by design (see get_sales_totals). New export only: list_codes,
@@ -1596,7 +1632,7 @@ class DB:
         buf = io.StringIO(newline="")
         w = csv.writer(buf)
         w.writerow(cols)
-        for row in self.list_codes(limit, agent, state, month, offset, bound_to, bound_only, redeemed_by, settled_month, currency, has_sale, min_credits, max_credits, reason, expired, sale_ref, expires_month, code):
+        for row in self.list_codes(limit, agent, state, month, offset, bound_to, bound_only, redeemed_by, settled_month, currency, has_sale, min_credits, max_credits, reason, expired, sale_ref, expires_month, code, min_sale):
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
@@ -1725,11 +1761,11 @@ class DB:
             for a in sorted(per_agent_day)}
         return zero
 
-    def get_filtered_sales_totals(self, agent=None, state=None, month=None, bound_to=None, bound_only=False, redeemed_by=None, settled_month=None, currency=None, has_sale=None, min_credits=None, max_credits=None, reason=None, expired=None, sale_ref=None, expires_month=None, code=None):
+    def get_filtered_sales_totals(self, agent=None, state=None, month=None, bound_to=None, bound_only=False, redeemed_by=None, settled_month=None, currency=None, has_sale=None, min_credits=None, max_credits=None, reason=None, expired=None, sale_ref=None, expires_month=None, code=None, min_sale=None):
         """Recorded revenue over the sales-book filter, read-only.
 
         {codes, redeemed, revoked, outstanding, with_sale, sales:{CUR: total}}
-        over exactly the rows list_codes(limit, agent, state, month, settled_month, expires_month, bound_to, redeemed_by, currency, has_sale, min_credits, max_credits, reason, expired) would
+        over exactly the rows list_codes(limit, agent, state, month, settled_month, expires_month, bound_to, redeemed_by, currency, has_sale, min_credits, max_credits, reason, expired, min_sale) would
         list (localhost GET /api/codes serves it as filtered next to codes,
         so the owner reads the recorded revenue for one bringer, one state,
         one mint month, the earmarked slice, one redeemer's codes, one
@@ -1769,7 +1805,10 @@ class DB:
         optional sale-reference substring filter on the recorded sale_ref
         (None/blank = every code, matched case-insensitively). code is
         the same optional code-substring filter on the minted code itself
-        (None/blank = every code, matched case-insensitively). Sums round to 9 decimals
+        (None/blank = every code, matched case-insensitively). min_sale
+        is the same optional floor on the recorded sale_amount (positive
+        number keeps sale_amount>=N, codes without a recorded sale never
+        match, anything else = every code). Sums round to 9 decimals
         (a lamport). No new table, never an error except the malformed
         month. New totals only: list_codes, /api/codes rows/totals,
         /api/usage, badge, history and health shapes untouched."""
@@ -1788,6 +1827,7 @@ class DB:
         want_exp = parse_expired(expired)
         want_ref = parse_sale_ref(sale_ref)
         want_code = parse_code(code)
+        want_msale = parse_min_sale(min_sale)
         now = utcnow()
         ssm = None
         if isinstance(settled_month, str) and settled_month.strip().lower() == "all":
@@ -1872,6 +1912,9 @@ class DB:
             if want_code is not None:
                 conds.append("INSTR(lower(code), lower(?))>0")
                 params.append(want_code)
+            if want_msale is not None:
+                conds.append("sale_amount>=?")
+                params.append(want_msale)
             where = ("WHERE " + " AND ".join(conds)) if conds else ""
             rows = self.c.execute(
                 "SELECT redeemed_by, revoked, sale_amount, sale_currency "
@@ -2464,9 +2507,10 @@ def make_handler(db):
                 want_exp = parse_expired(q.get("expired", [None])[0])
                 want_sref = parse_sale_ref(q.get("sale_ref", [None])[0])
                 want_code = parse_code(q.get("code", [None])[0])
+                want_msale = parse_min_sale(q.get("min_sale", [None])[0])
                 try:
-                    codes = db.list_codes(limit, want, st, mo, offset, want_bound, bound_only, want_redeemer, smo, want_cur, want_sale, want_min, want_max, want_reason, want_exp, want_sref, emo, want_code)
-                    filtered = db.get_filtered_sales_totals(want, st, mo, want_bound, bound_only, want_redeemer, smo, want_cur, want_sale, want_min, want_max, want_reason, want_exp, want_sref, emo, want_code)
+                    codes = db.list_codes(limit, want, st, mo, offset, want_bound, bound_only, want_redeemer, smo, want_cur, want_sale, want_min, want_max, want_reason, want_exp, want_sref, emo, want_code, want_msale)
+                    filtered = db.get_filtered_sales_totals(want, st, mo, want_bound, bound_only, want_redeemer, smo, want_cur, want_sale, want_min, want_max, want_reason, want_exp, want_sref, emo, want_code, want_msale)
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 if mo is not None:
@@ -2475,7 +2519,7 @@ def make_handler(db):
                     smo = db._norm_month(smo)
                 if emo is not None:
                     emo = db._norm_month(emo)
-                return self._json({"ok": True, "agent": want, "bound_to": want_bound, "bound_only": bound_only, "redeemed_by": want_redeemer, "settled_month": smo, "expires_month": emo, "currency": want_cur, "has_sale": want_sale, "min_credits": want_min, "max_credits": want_max, "reason": want_reason, "expired": want_exp, "sale_ref": want_sref, "code": want_code, "state": st, "month": mo,
+                return self._json({"ok": True, "agent": want, "bound_to": want_bound, "bound_only": bound_only, "redeemed_by": want_redeemer, "settled_month": smo, "expires_month": emo, "currency": want_cur, "has_sale": want_sale, "min_credits": want_min, "max_credits": want_max, "reason": want_reason, "expired": want_exp, "sale_ref": want_sref, "code": want_code, "min_sale": want_msale, "state": st, "month": mo,
                                      "codes": codes,
                                      "filtered": filtered,
                                      "totals": db.get_sales_totals()})
@@ -2523,12 +2567,13 @@ def make_handler(db):
                 want_exp = parse_expired(q.get("expired", [None])[0])
                 want_sref = parse_sale_ref(q.get("sale_ref", [None])[0])
                 want_code = parse_code(q.get("code", [None])[0])
+                want_msale = parse_min_sale(q.get("min_sale", [None])[0])
                 emonth = q.get("expires_month", [None])[0]
                 emo = emonth.strip() if isinstance(emonth, str) and emonth.strip() else None
                 if emo is not None and emo.lower() == "all":
                     emo = None
                 try:
-                    b = db.codes_csv(limit, want, st, mo, offset, want_bound, bound_only, want_redeemer, smo, want_cur, want_sale, want_min, want_max, want_reason, want_exp, want_sref, emo, want_code).encode()
+                    b = db.codes_csv(limit, want, st, mo, offset, want_bound, bound_only, want_redeemer, smo, want_cur, want_sale, want_min, want_max, want_reason, want_exp, want_sref, emo, want_code, want_msale).encode()
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 self.send_response(200)
