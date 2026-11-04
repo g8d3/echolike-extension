@@ -425,6 +425,9 @@
   "errRedeemRevoked": {
     "message": "That code was revoked — ask for a fresh one."
   },
+  "errRedeemNotYours": {
+    "message": "That code was minted for another buyer — ask for your own code."
+  },
   "errRedeemOldServer": {
     "message": "That inbox is too old for redeem codes: update server.py."
   },

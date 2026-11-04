@@ -421,6 +421,9 @@
   "errRedeemRevoked": {
     "message": "Ese código fue revocado — pide uno nuevo."
   },
+  "errRedeemNotYours": {
+    "message": "Ese código es para otro comprador — pide tu propio código."
+  },
   "errRedeemOldServer": {
     "message": "Ese inbox es muy viejo para códigos: actualiza server.py."
   },

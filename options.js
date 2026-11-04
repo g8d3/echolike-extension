@@ -117,6 +117,7 @@ async function redeem() {
   }
   const err = String((j && j.error) || "");
   if (r.status === 409 && /revoked/.test(err)) texto(msgEl, t("errRedeemRevoked"), false);
+  else if (r.status === 403 || /not for you/.test(err)) texto(msgEl, t("errRedeemNotYours"), false);
   else if (r.status === 409 || /already redeemed/.test(err)) texto(msgEl, t("errRedeemUsed"), false);
   else if (r.status === 401) texto(msgEl, t("errBadToken"), false);
   else if (/not found/.test(err)) texto(msgEl, t("errRedeemOldServer"), false);
