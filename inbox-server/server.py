@@ -178,6 +178,24 @@ def parse_expired(v):
     return None
 
 
+def parse_sale_ref(v):
+    """Sale-reference filter for the sales book: str or None.
+
+    A non-blank string keeps only codes whose recorded sale_ref contains
+    it (localhost GET /api/codes?sale_ref=abc123 answers 'which code did
+    this on-chain payment buy' when the owner sees a tx hash and needs
+    the code without grepping the full book); None = every code. Matched
+    case-insensitively as a substring, so a pasted hash prefix finds the
+    full stored ref; blank/non-string reads as None (every code), never
+    an error."""
+    if v is None:
+        return None
+    if not isinstance(v, str):
+        return None
+    s = v.strip()
+    return s[:200] if s else None
+
+
 def is_private(ip):
     """LAN, Tailscale and loopback: places where getting in already means trust."""
     try:
@@ -1271,7 +1289,7 @@ class DB:
                           else close["commission_pct"]])
         return buf.getvalue()
 
-    def list_codes(self, limit=100, agent=None, state=None, month=None, offset=0, bound_to=None, bound_only=False, redeemed_by=None, settled_month=None, currency=None, has_sale=None, min_credits=None, max_credits=None, reason=None, expired=None):
+    def list_codes(self, limit=100, agent=None, state=None, month=None, offset=0, bound_to=None, bound_only=False, redeemed_by=None, settled_month=None, currency=None, has_sale=None, min_credits=None, max_credits=None, reason=None, expired=None, sale_ref=None):
         """Prepaid code inventory, newest first.
 
         Read-only view over grant_codes for the owner (localhost GET
@@ -1352,9 +1370,14 @@ class DB:
         past their expires_at, False = only codes still live or minted
         without a deadline, None/blank/'all' = every code (junk reads as
         None, never an error).
+        sale_ref is an optional sale-reference substring filter on the
+        recorded sale_ref (localhost GET /api/codes?sale_ref=abc123
+        answers 'which code did this on-chain payment buy' when the owner
+        reconciles one tx hash without grepping the full book); matched
+        case-insensitively as a substring, None/blank = every code.
         agent, state, month, settled_month, bound_to, bound_only,
-        redeemed_by, currency, has_sale, min_credits, max_credits, reason
-        and expired combine (AND).
+        redeemed_by, currency, has_sale, min_credits, max_credits, reason,
+        expired and sale_ref combine (AND).
         offset is an optional row skip for paging past the 500-row cap
         (localhost GET /api/codes?limit=100&offset=100 answers 'the next
         page of the same book'); junk/negative reads as 0, beyond-the-book
@@ -1381,6 +1404,7 @@ class DB:
         want_max = parse_max_credits(max_credits)
         want_reason = parse_reason(reason)
         want_exp = parse_expired(expired)
+        want_ref = parse_sale_ref(sale_ref)
         now = utcnow()
         ssm = None
         if isinstance(settled_month, str) and settled_month.strip().lower() == "all":
@@ -1449,6 +1473,9 @@ class DB:
             elif want_exp is False:
                 conds.append("(expires_at IS NULL OR expires_at='' OR expires_at>?)")
                 params.append(now)
+            if want_ref is not None:
+                conds.append("INSTR(lower(sale_ref), lower(?))>0")
+                params.append(want_ref)
             where = ("WHERE " + " AND ".join(conds)) if conds else ""
             params.append(limit)
             params.append(offset)
@@ -1469,7 +1496,7 @@ class DB:
                  "bringer": r[11] or None,
                  "bound_to": r[12] or None} for r in rows]
 
-    def codes_csv(self, limit=100, agent=None, state=None, month=None, offset=0, bound_to=None, bound_only=False, redeemed_by=None, settled_month=None, currency=None, has_sale=None, min_credits=None, max_credits=None, reason=None, expired=None):
+    def codes_csv(self, limit=100, agent=None, state=None, month=None, offset=0, bound_to=None, bound_only=False, redeemed_by=None, settled_month=None, currency=None, has_sale=None, min_credits=None, max_credits=None, reason=None, expired=None, sale_ref=None):
         """Sales book as CSV, newest first (same rows as list_codes).
 
         One header row plus one row per code for the owner (localhost GET
@@ -1505,6 +1532,9 @@ class DB:
         codes past their expires_at, False = only codes still live or
         without a deadline, None/blank/'all' = every code, junk reads as
         None, never an error).
+        sale_ref is the same optional sale-reference substring filter on
+        the recorded sale_ref (None/blank = every code, matched
+        case-insensitively).
         offset is the same optional row skip as list_codes (paging past the
         500-row cap, junk/negative reads as 0). Totals stay
         whole-book by design (see get_sales_totals). New export only: list_codes,
@@ -1515,7 +1545,7 @@ class DB:
         buf = io.StringIO(newline="")
         w = csv.writer(buf)
         w.writerow(cols)
-        for row in self.list_codes(limit, agent, state, month, offset, bound_to, bound_only, redeemed_by, settled_month, currency, has_sale, min_credits, max_credits, reason, expired):
+        for row in self.list_codes(limit, agent, state, month, offset, bound_to, bound_only, redeemed_by, settled_month, currency, has_sale, min_credits, max_credits, reason, expired, sale_ref):
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
@@ -1644,15 +1674,15 @@ class DB:
             for a in sorted(per_agent_day)}
         return zero
 
-    def get_filtered_sales_totals(self, agent=None, state=None, month=None, bound_to=None, bound_only=False, redeemed_by=None, settled_month=None, currency=None, has_sale=None, min_credits=None, max_credits=None, reason=None, expired=None):
+    def get_filtered_sales_totals(self, agent=None, state=None, month=None, bound_to=None, bound_only=False, redeemed_by=None, settled_month=None, currency=None, has_sale=None, min_credits=None, max_credits=None, reason=None, expired=None, sale_ref=None):
         """Recorded revenue over the sales-book filter, read-only.
 
         {codes, redeemed, revoked, outstanding, with_sale, sales:{CUR: total}}
         over exactly the rows list_codes(limit, agent, state, month, settled_month, bound_to, redeemed_by, currency, has_sale, min_credits, max_credits, reason, expired) would
         list (localhost GET /api/codes serves it as filtered next to codes,
         so the owner reads the recorded revenue for one bringer, one state,
-        one mint month, the earmarked slice, one redeemer's codes or one
-        rail without summing rows or opening /api/close).
+        one mint month, the earmarked slice, one redeemer's codes, one
+        rail or one tx hash without summing rows or opening /api/close).
         Totals cover the whole filter, never just the ?limit= window of the
         row list. The full-book totals stay where they were (get_sales_totals
         served as totals, whole-book by design); settlement attribution
@@ -1681,7 +1711,9 @@ class DB:
         case-insensitively). expired is the same optional past-deadline
         filter (True = only codes past their expires_at, False = only
         codes still live or without a deadline, None/blank/'all' = every
-        code, junk reads as None, never an error). Sums round to 9 decimals
+        code, junk reads as None, never an error). sale_ref is the same
+        optional sale-reference substring filter on the recorded sale_ref
+        (None/blank = every code, matched case-insensitively). Sums round to 9 decimals
         (a lamport). No new table, never an error except the malformed
         month. New totals only: list_codes, /api/codes rows/totals,
         /api/usage, badge, history and health shapes untouched."""
@@ -1698,6 +1730,7 @@ class DB:
         want_max = parse_max_credits(max_credits)
         want_reason = parse_reason(reason)
         want_exp = parse_expired(expired)
+        want_ref = parse_sale_ref(sale_ref)
         now = utcnow()
         ssm = None
         if isinstance(settled_month, str) and settled_month.strip().lower() == "all":
@@ -1766,6 +1799,9 @@ class DB:
             elif want_exp is False:
                 conds.append("(expires_at IS NULL OR expires_at='' OR expires_at>?)")
                 params.append(now)
+            if want_ref is not None:
+                conds.append("INSTR(lower(sale_ref), lower(?))>0")
+                params.append(want_ref)
             where = ("WHERE " + " AND ".join(conds)) if conds else ""
             rows = self.c.execute(
                 "SELECT redeemed_by, revoked, sale_amount, sale_currency "
@@ -2352,16 +2388,17 @@ def make_handler(db):
                 want_max = parse_max_credits(q.get("max_credits", [None])[0])
                 want_reason = parse_reason(q.get("reason", [None])[0])
                 want_exp = parse_expired(q.get("expired", [None])[0])
+                want_sref = parse_sale_ref(q.get("sale_ref", [None])[0])
                 try:
-                    codes = db.list_codes(limit, want, st, mo, offset, want_bound, bound_only, want_redeemer, smo, want_cur, want_sale, want_min, want_max, want_reason, want_exp)
-                    filtered = db.get_filtered_sales_totals(want, st, mo, want_bound, bound_only, want_redeemer, smo, want_cur, want_sale, want_min, want_max, want_reason, want_exp)
+                    codes = db.list_codes(limit, want, st, mo, offset, want_bound, bound_only, want_redeemer, smo, want_cur, want_sale, want_min, want_max, want_reason, want_exp, want_sref)
+                    filtered = db.get_filtered_sales_totals(want, st, mo, want_bound, bound_only, want_redeemer, smo, want_cur, want_sale, want_min, want_max, want_reason, want_exp, want_sref)
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 if mo is not None:
                     mo = db._norm_month(mo)
                 if smo is not None:
                     smo = db._norm_month(smo)
-                return self._json({"ok": True, "agent": want, "bound_to": want_bound, "bound_only": bound_only, "redeemed_by": want_redeemer, "settled_month": smo, "currency": want_cur, "has_sale": want_sale, "min_credits": want_min, "max_credits": want_max, "reason": want_reason, "expired": want_exp, "state": st, "month": mo,
+                return self._json({"ok": True, "agent": want, "bound_to": want_bound, "bound_only": bound_only, "redeemed_by": want_redeemer, "settled_month": smo, "currency": want_cur, "has_sale": want_sale, "min_credits": want_min, "max_credits": want_max, "reason": want_reason, "expired": want_exp, "sale_ref": want_sref, "state": st, "month": mo,
                                      "codes": codes,
                                      "filtered": filtered,
                                      "totals": db.get_sales_totals()})
@@ -2407,8 +2444,9 @@ def make_handler(db):
                 want_max = parse_max_credits(q.get("max_credits", [None])[0])
                 want_reason = parse_reason(q.get("reason", [None])[0])
                 want_exp = parse_expired(q.get("expired", [None])[0])
+                want_sref = parse_sale_ref(q.get("sale_ref", [None])[0])
                 try:
-                    b = db.codes_csv(limit, want, st, mo, offset, want_bound, bound_only, want_redeemer, smo, want_cur, want_sale, want_min, want_max, want_reason, want_exp).encode()
+                    b = db.codes_csv(limit, want, st, mo, offset, want_bound, bound_only, want_redeemer, smo, want_cur, want_sale, want_min, want_max, want_reason, want_exp, want_sref).encode()
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 self.send_response(200)
