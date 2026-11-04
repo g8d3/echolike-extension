@@ -2012,7 +2012,7 @@ class DB:
             return []
         return [{"day": r[0], "credits": r[1], "reason": r[2]} for r in rows]
 
-    def list_grants(self, limit=100, user=None, month=None, offset=0):
+    def list_grants(self, limit=100, user=None, month=None, offset=0, reason=None):
         """Manual-grant ledger for the owner, newest first, read-only.
 
         [{at, day, user_id, credits, reason}] over the grants table for the
@@ -2035,7 +2035,12 @@ class DB:
         is an optional row skip for paging past the 500-row cap
         (localhost GET /api/grants?limit=100&offset=100 answers 'the next
         page of the same ledger'); junk/negative reads as 0, beyond-the-book
-        reads [], totals ignore it (whole filter, never the window)."""
+        reads [], totals ignore it (whole filter, never the window). reason
+        is an optional campaign substring on the grant reason
+        (localhost GET /api/grants?reason=launch answers 'which grants
+        funded the launch campaign', case-insensitive, same vocabulary as
+        /api/codes?reason=); None, blank or non-string means every grant.
+        user, month and reason combine (AND)."""
         try:
             offset = int(offset)
         except (TypeError, ValueError):
@@ -2054,6 +2059,7 @@ class DB:
             m = self._norm_month(month)
             if m is None:
                 raise ValueError("month must be YYYY-MM")
+        want_reason = parse_reason(reason)
         try:
             conds = []
             params = []
@@ -2063,6 +2069,9 @@ class DB:
             if m:
                 conds.append("substr(day,1,7)=?")
                 params.append(m)
+            if want_reason is not None:
+                conds.append("INSTR(lower(reason), lower(?))>0")
+                params.append(want_reason)
             where = ("WHERE " + " AND ".join(conds)) if conds else ""
             params.append(limit)
             params.append(offset)
@@ -2075,7 +2084,7 @@ class DB:
         return [{"at": r[0], "day": r[1], "user_id": r[2],
                  "credits": r[3], "reason": r[4] or ""} for r in rows]
 
-    def grants_csv(self, limit=100, user=None, month=None, offset=0):
+    def grants_csv(self, limit=100, user=None, month=None, offset=0, reason=None):
         """Manual-grant ledger as CSV, newest first (same rows as list_grants).
 
         One header row plus one row per manual grant for the owner
@@ -2090,7 +2099,8 @@ class DB:
         (None/blank/'all' = every month, malformed raises ValueError for
         a 400). Limit clamped 1..500, default 100. offset is the same
         optional row skip as list_grants (paging past the 500-row cap).
-        New export only:
+        reason is the same optional campaign substring as list_grants
+        (None/blank = every grant). New export only:
         list_grants, /api/grants, grant recording, redeem, /api/usage,
         badge, history, codes, sales totals, payouts, statement, close
         and health shapes untouched."""
@@ -2098,11 +2108,11 @@ class DB:
         buf = io.StringIO(newline="")
         w = csv.writer(buf)
         w.writerow(cols)
-        for row in self.list_grants(limit, user, month, offset):
+        for row in self.list_grants(limit, user, month, offset, reason):
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
-    def get_grant_totals(self, user=None, month=None):
+    def get_grant_totals(self, user=None, month=None, reason=None):
         """Granted-credit totals over the same filter as list_grants().
 
         {grants, credits}: how many manual grants and how many credits they
@@ -2113,6 +2123,8 @@ class DB:
         same optional grant-month filter in YYYY-MM on day (None/blank/'all'
         = every month, malformed raises ValueError for a 400). Totals cover
         the whole filter, never just the ?limit= window of the row list.
+        reason is the same optional campaign substring as list_grants
+        (None/blank = every grant, totals scope to the same rows).
         Read-only, never an error, unknown state is all zeros. New totals
         only: list_grants, grants_csv, grant recording, redeem, /api/usage,
         badge, history, codes, sales totals, payouts, statement, close
@@ -2134,6 +2146,9 @@ class DB:
             if m:
                 conds.append("substr(day,1,7)=?")
                 params.append(m)
+            if parse_reason(reason) is not None:
+                conds.append("INSTR(lower(reason), lower(?))>0")
+                params.append(parse_reason(reason))
             where = ("WHERE " + " AND ".join(conds)) if conds else ""
             row = self.c.execute(
                 "SELECT COUNT(*), COALESCE(SUM(credits),0) FROM grants "
@@ -2698,9 +2713,10 @@ def make_handler(db):
                     offset = max(0, int(q.get("offset", ["0"])[0]))
                 except ValueError:
                     offset = 0
+                want_reason = parse_reason(q.get("reason", [None])[0])
                 try:
-                    rows = db.list_grants(limit, want, month, offset)
-                    totals = db.get_grant_totals(want, month)
+                    rows = db.list_grants(limit, want, month, offset, want_reason)
+                    totals = db.get_grant_totals(want, month, want_reason)
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 mon = month.strip() if isinstance(month, str) and month.strip() else None
@@ -2709,6 +2725,7 @@ def make_handler(db):
                 if mon is not None:
                     mon = db._norm_month(mon)
                 return self._json({"ok": True, "user": want, "month": mon,
+                                     "reason": want_reason,
                                      "grants": rows,
                                      "totals": totals})
             if u.path == "/api/grants.csv":
@@ -2727,8 +2744,9 @@ def make_handler(db):
                     offset = max(0, int(q.get("offset", ["0"])[0]))
                 except ValueError:
                     offset = 0
+                want_reason = parse_reason(q.get("reason", [None])[0])
                 try:
-                    b = db.grants_csv(limit, want, month, offset).encode()
+                    b = db.grants_csv(limit, want, month, offset, want_reason).encode()
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 self.send_response(200)
