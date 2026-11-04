@@ -70,6 +70,30 @@ except (ValueError, TypeError, AttributeError):
 OWNER_USER = "u_owner"
 
 
+def parse_has_sale(v):
+    """Tri-state sale-note filter for the sales book: True/False/None.
+
+    True = only codes carrying a recorded sale (sale_amount set with a
+    sale_currency, the same money get_sales_totals sums); False = only
+    codes without one (free/promo or not-yet-billed); None = every code.
+    Accepts the URL spellings ('1/true/yes/on' and '0/false/no/off',
+    case-insensitive, blank/'all' = every code) plus real booleans for
+    direct DB calls; anything else reads as None (every code), never an
+    error."""
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return None
+    s = v.strip().lower() if isinstance(v, str) else ""
+    if s in ("", "all"):
+        return None
+    if s in ("1", "true", "yes", "on"):
+        return True
+    if s in ("0", "false", "no", "off"):
+        return False
+    return None
+
+
 def is_private(ip):
     """LAN, Tailscale and loopback: places where getting in already means trust."""
     try:
@@ -1163,7 +1187,7 @@ class DB:
                           else close["commission_pct"]])
         return buf.getvalue()
 
-    def list_codes(self, limit=100, agent=None, state=None, month=None, offset=0, bound_to=None, bound_only=False, redeemed_by=None, settled_month=None, currency=None):
+    def list_codes(self, limit=100, agent=None, state=None, month=None, offset=0, bound_to=None, bound_only=False, redeemed_by=None, settled_month=None, currency=None, has_sale=None):
         """Prepaid code inventory, newest first.
 
         Read-only view over grant_codes for the owner (localhost GET
@@ -1217,9 +1241,14 @@ class DB:
         without grepping the full book); matched case-insensitively
         (stored upper-cased at mint), None/blank/'all' = every code,
         unknown currencies report [], codes minted without a recorded
-        sale never match a currency.
+        sale never match a currency. has_sale is an optional sale-note
+        filter (localhost GET /api/codes?has_sale=1 answers 'which codes
+        carry money' and ?has_sale=0 'which are free or not yet billed'
+        when the owner chases unbilled top-ups); True = only codes with a
+        recorded sale, False = only codes without one, None/blank/'all'
+        = every code.
         agent, state, month, settled_month, bound_to, bound_only,
-        redeemed_by and currency combine (AND).
+        redeemed_by, currency and has_sale combine (AND).
         offset is an optional row skip for paging past the 500-row cap
         (localhost GET /api/codes?limit=100&offset=100 answers 'the next
         page of the same book'); junk/negative reads as 0, beyond-the-book
@@ -1241,6 +1270,7 @@ class DB:
         want_cur = currency.strip().upper() if isinstance(currency, str) else ""
         if want_cur == "ALL":
             want_cur = ""
+        want_sale = parse_has_sale(has_sale)
         ssm = None
         if isinstance(settled_month, str) and settled_month.strip().lower() == "all":
             settled_month = None
@@ -1289,6 +1319,10 @@ class DB:
             if want_cur:
                 conds.append("sale_currency=?")
                 params.append(want_cur)
+            if want_sale is True:
+                conds.append("(sale_amount IS NOT NULL AND sale_currency IS NOT NULL AND sale_currency<>'')")
+            elif want_sale is False:
+                conds.append("NOT (sale_amount IS NOT NULL AND sale_currency IS NOT NULL AND sale_currency<>'')")
             where = ("WHERE " + " AND ".join(conds)) if conds else ""
             params.append(limit)
             params.append(offset)
@@ -1309,7 +1343,7 @@ class DB:
                  "bringer": r[11] or None,
                  "bound_to": r[12] or None} for r in rows]
 
-    def codes_csv(self, limit=100, agent=None, state=None, month=None, offset=0, bound_to=None, bound_only=False, redeemed_by=None, settled_month=None, currency=None):
+    def codes_csv(self, limit=100, agent=None, state=None, month=None, offset=0, bound_to=None, bound_only=False, redeemed_by=None, settled_month=None, currency=None, has_sale=None):
         """Sales book as CSV, newest first (same rows as list_codes).
 
         One header row plus one row per code for the owner (localhost GET
@@ -1333,6 +1367,9 @@ class DB:
         the same optional exact-match redeemer filter (None/blank = every
         code). currency is the same optional sale-currency filter
         (None/blank/'all' = every code, matched case-insensitively).
+        has_sale is the same optional sale-note filter (True = only codes
+        with a recorded sale, False = only codes without one,
+        None/blank/'all' = every code).
         offset is the same optional row skip as list_codes (paging past the
         500-row cap, junk/negative reads as 0). Totals stay
         whole-book by design (see get_sales_totals). New export only: list_codes,
@@ -1343,7 +1380,7 @@ class DB:
         buf = io.StringIO(newline="")
         w = csv.writer(buf)
         w.writerow(cols)
-        for row in self.list_codes(limit, agent, state, month, offset, bound_to, bound_only, redeemed_by, settled_month, currency):
+        for row in self.list_codes(limit, agent, state, month, offset, bound_to, bound_only, redeemed_by, settled_month, currency, has_sale):
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
@@ -1472,15 +1509,15 @@ class DB:
             for a in sorted(per_agent_day)}
         return zero
 
-    def get_filtered_sales_totals(self, agent=None, state=None, month=None, bound_to=None, bound_only=False, redeemed_by=None, settled_month=None, currency=None):
+    def get_filtered_sales_totals(self, agent=None, state=None, month=None, bound_to=None, bound_only=False, redeemed_by=None, settled_month=None, currency=None, has_sale=None):
         """Recorded revenue over the sales-book filter, read-only.
 
         {codes, redeemed, revoked, outstanding, with_sale, sales:{CUR: total}}
-        over exactly the rows list_codes(limit, agent, state, month, settled_month, bound_to, redeemed_by) would
+        over exactly the rows list_codes(limit, agent, state, month, settled_month, bound_to, redeemed_by, currency, has_sale) would
         list (localhost GET /api/codes serves it as filtered next to codes,
         so the owner reads the recorded revenue for one bringer, one state,
-        one mint month, the earmarked slice or one redeemer's codes without
-        summing rows or opening /api/close).
+        one mint month, the earmarked slice, one redeemer's codes or one
+        rail without summing rows or opening /api/close).
         Totals cover the whole filter, never just the ?limit= window of the
         row list. The full-book totals stay where they were (get_sales_totals
         served as totals, whole-book by design); settlement attribution
@@ -1491,7 +1528,9 @@ class DB:
         exact-match (None/blank = every buyer), bound_only earmarked-only
         switch (truthy = only bound codes), redeemed_by exact-match
         (None/blank = every redeemer), currency sale-currency exact-match
-        (None/blank/'all' = every code, case-insensitive),
+        (None/blank/'all' = every code, case-insensitive), has_sale
+        sale-note filter (True = only codes with a recorded sale, False =
+        only codes without one, None/blank/'all' = every code),
         settled_month settled-month YYYY-MM
         on redeemed_at (None/blank/'all' = every settlement month,
         malformed raises ValueError for a 400), state
@@ -1510,6 +1549,7 @@ class DB:
         want_cur = currency.strip().upper() if isinstance(currency, str) else ""
         if want_cur == "ALL":
             want_cur = ""
+        want_sale = parse_has_sale(has_sale)
         ssm = None
         if isinstance(settled_month, str) and settled_month.strip().lower() == "all":
             settled_month = None
@@ -1558,6 +1598,10 @@ class DB:
             if want_cur:
                 conds.append("sale_currency=?")
                 params.append(want_cur)
+            if want_sale is True:
+                conds.append("(sale_amount IS NOT NULL AND sale_currency IS NOT NULL AND sale_currency<>'')")
+            elif want_sale is False:
+                conds.append("NOT (sale_amount IS NOT NULL AND sale_currency IS NOT NULL AND sale_currency<>'')")
             where = ("WHERE " + " AND ".join(conds)) if conds else ""
             rows = self.c.execute(
                 "SELECT redeemed_by, revoked, sale_amount, sale_currency "
@@ -2139,16 +2183,17 @@ def make_handler(db):
                 want_cur = cur.strip().upper() if isinstance(cur, str) and cur.strip() else None
                 if want_cur == "ALL":
                     want_cur = None
+                want_sale = parse_has_sale(q.get("has_sale", [None])[0])
                 try:
-                    codes = db.list_codes(limit, want, st, mo, offset, want_bound, bound_only, want_redeemer, smo, want_cur)
-                    filtered = db.get_filtered_sales_totals(want, st, mo, want_bound, bound_only, want_redeemer, smo, want_cur)
+                    codes = db.list_codes(limit, want, st, mo, offset, want_bound, bound_only, want_redeemer, smo, want_cur, want_sale)
+                    filtered = db.get_filtered_sales_totals(want, st, mo, want_bound, bound_only, want_redeemer, smo, want_cur, want_sale)
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 if mo is not None:
                     mo = db._norm_month(mo)
                 if smo is not None:
                     smo = db._norm_month(smo)
-                return self._json({"ok": True, "agent": want, "bound_to": want_bound, "bound_only": bound_only, "redeemed_by": want_redeemer, "settled_month": smo, "currency": want_cur, "state": st, "month": mo,
+                return self._json({"ok": True, "agent": want, "bound_to": want_bound, "bound_only": bound_only, "redeemed_by": want_redeemer, "settled_month": smo, "currency": want_cur, "has_sale": want_sale, "state": st, "month": mo,
                                      "codes": codes,
                                      "filtered": filtered,
                                      "totals": db.get_sales_totals()})
@@ -2189,8 +2234,9 @@ def make_handler(db):
                 want_cur = cur.strip().upper() if isinstance(cur, str) and cur.strip() else None
                 if want_cur == "ALL":
                     want_cur = None
+                want_sale = parse_has_sale(q.get("has_sale", [None])[0])
                 try:
-                    b = db.codes_csv(limit, want, st, mo, offset, want_bound, bound_only, want_redeemer, smo, want_cur).encode()
+                    b = db.codes_csv(limit, want, st, mo, offset, want_bound, bound_only, want_redeemer, smo, want_cur, want_sale).encode()
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 self.send_response(200)
