@@ -1163,7 +1163,7 @@ class DB:
                           else close["commission_pct"]])
         return buf.getvalue()
 
-    def list_codes(self, limit=100, agent=None, state=None, month=None, offset=0, bound_to=None, bound_only=False, redeemed_by=None):
+    def list_codes(self, limit=100, agent=None, state=None, month=None, offset=0, bound_to=None, bound_only=False, redeemed_by=None, settled_month=None):
         """Prepaid code inventory, newest first.
 
         Read-only view over grant_codes for the owner (localhost GET
@@ -1190,7 +1190,14 @@ class DB:
         answers 'which codes entered the book this month' next to the
         per-month /api/close reckoning); None or blank means every month,
         a malformed month raises ValueError (the route answers 400, same
-        vocabulary as /api/close). bound_to is an optional exact-match
+        vocabulary as /api/close). settled_month is an optional
+        settled-month filter in YYYY-MM on redeemed_at (localhost GET
+        /api/codes?settled_month=X answers 'which codes settled this
+        month' next to the per-month /api/close reckoning, line by line);
+        None or blank means every settlement month (unredeemed codes carry
+        no redeemed_at and never match a settled month), a malformed month
+        raises ValueError (the route answers 400, same vocabulary as
+        /api/close). bound_to is an optional exact-match
         filter on the buyer the code was minted FOR (localhost GET
         /api/codes?bound_to=X answers 'which codes did I mint FOR this
         buyer' after the bill-first queue names them); None or blank means
@@ -1204,7 +1211,8 @@ class DB:
         'which codes did THIS buyer redeem' when support hears 'I redeemed
         but no balance', or verifies a bound code landed with its buyer);
         None or blank means every code, unknown redeemers report [].
-        agent, state, month, bound_to, bound_only and redeemed_by combine (AND).
+        agent, state, month, settled_month, bound_to, bound_only and
+        redeemed_by combine (AND).
         offset is an optional row skip for paging past the 500-row cap
         (localhost GET /api/codes?limit=100&offset=100 answers 'the next
         page of the same book'); junk/negative reads as 0, beyond-the-book
@@ -1223,6 +1231,13 @@ class DB:
         want = agent.strip() if isinstance(agent, str) else ""
         want_bound = bound_to.strip() if isinstance(bound_to, str) else ""
         want_redeemer = redeemed_by.strip() if isinstance(redeemed_by, str) else ""
+        ssm = None
+        if isinstance(settled_month, str) and settled_month.strip().lower() == "all":
+            settled_month = None
+        if settled_month is not None and (not isinstance(settled_month, str) or settled_month.strip()):
+            ssm = self._norm_month(settled_month)
+            if ssm is None:
+                raise ValueError("settled_month must be YYYY-MM")
         s = state.strip().lower() if isinstance(state, str) else ""
         if s in ("", "all"):
             s = ""
@@ -1249,6 +1264,9 @@ class DB:
                 params.append(want_redeemer)
             if bound_only:
                 conds.append("(bound_to IS NOT NULL AND bound_to<>'')")
+            if ssm:
+                conds.append("substr(redeemed_at,1,7)=?")
+                params.append(ssm)
             if s == "redeemed":
                 conds.append("redeemed_by IS NOT NULL AND redeemed_by<>''")
             elif s == "revoked":
@@ -1278,7 +1296,7 @@ class DB:
                  "bringer": r[11] or None,
                  "bound_to": r[12] or None} for r in rows]
 
-    def codes_csv(self, limit=100, agent=None, state=None, month=None, offset=0, bound_to=None, bound_only=False, redeemed_by=None):
+    def codes_csv(self, limit=100, agent=None, state=None, month=None, offset=0, bound_to=None, bound_only=False, redeemed_by=None, settled_month=None):
         """Sales book as CSV, newest first (same rows as list_codes).
 
         One header row plus one row per code for the owner (localhost GET
@@ -1293,6 +1311,9 @@ class DB:
         same optional redeem-state filter (None/blank/'all' = every code)
         and month the same optional mint-month filter in YYYY-MM
         (None/blank = every month, malformed raises ValueError for a 400).
+        settled_month is the same optional settled-month filter in YYYY-MM
+        on redeemed_at (None/blank = every settlement month, malformed
+        raises ValueError for a 400).
         bound_to is the same optional exact-match buyer filter
         (None/blank = every code). bound_only is the same optional
         earmarked-only switch (truthy = only bound codes). redeemed_by is
@@ -1308,7 +1329,7 @@ class DB:
         buf = io.StringIO(newline="")
         w = csv.writer(buf)
         w.writerow(cols)
-        for row in self.list_codes(limit, agent, state, month, offset, bound_to, bound_only, redeemed_by):
+        for row in self.list_codes(limit, agent, state, month, offset, bound_to, bound_only, redeemed_by, settled_month):
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
@@ -1437,11 +1458,11 @@ class DB:
             for a in sorted(per_agent_day)}
         return zero
 
-    def get_filtered_sales_totals(self, agent=None, state=None, month=None, bound_to=None, bound_only=False, redeemed_by=None):
+    def get_filtered_sales_totals(self, agent=None, state=None, month=None, bound_to=None, bound_only=False, redeemed_by=None, settled_month=None):
         """Recorded revenue over the sales-book filter, read-only.
 
         {codes, redeemed, revoked, outstanding, with_sale, sales:{CUR: total}}
-        over exactly the rows list_codes(limit, agent, state, month, bound_to, redeemed_by) would
+        over exactly the rows list_codes(limit, agent, state, month, settled_month, bound_to, redeemed_by) would
         list (localhost GET /api/codes serves it as filtered next to codes,
         so the owner reads the recorded revenue for one bringer, one state,
         one mint month, the earmarked slice or one redeemer's codes without
@@ -1455,7 +1476,9 @@ class DB:
         list_codes: agent exact-match (None/blank = every bringer), bound_to
         exact-match (None/blank = every buyer), bound_only earmarked-only
         switch (truthy = only bound codes), redeemed_by exact-match
-        (None/blank = every redeemer), state
+        (None/blank = every redeemer), settled_month settled-month YYYY-MM
+        on redeemed_at (None/blank/'all' = every settlement month,
+        malformed raises ValueError for a 400), state
         redeemed/revoked/outstanding (None/blank/'all' = every state,
         unknown states report zeros beside the empty row list), month
         mint-month YYYY-MM on created_at (None/blank/'all' = every month,
@@ -1468,6 +1491,13 @@ class DB:
         want = agent.strip() if isinstance(agent, str) else ""
         want_bound = bound_to.strip() if isinstance(bound_to, str) else ""
         want_redeemer = redeemed_by.strip() if isinstance(redeemed_by, str) else ""
+        ssm = None
+        if isinstance(settled_month, str) and settled_month.strip().lower() == "all":
+            settled_month = None
+        if settled_month is not None and (not isinstance(settled_month, str) or settled_month.strip()):
+            ssm = self._norm_month(settled_month)
+            if ssm is None:
+                raise ValueError("settled_month must be YYYY-MM")
         s = state.strip().lower() if isinstance(state, str) else ""
         if s in ("", "all"):
             s = ""
@@ -1494,6 +1524,9 @@ class DB:
                 params.append(want_redeemer)
             if bound_only:
                 conds.append("(bound_to IS NOT NULL AND bound_to<>'')")
+            if ssm:
+                conds.append("substr(redeemed_at,1,7)=?")
+                params.append(ssm)
             if s == "redeemed":
                 conds.append("redeemed_by IS NOT NULL AND redeemed_by<>''")
             elif s == "revoked":
@@ -2076,14 +2109,20 @@ def make_handler(db):
                 bound_only = (str(bo).strip().lower() in ("1", "true", "yes", "on")) if bo is not None else False
                 red = q.get("redeemed_by", [None])[0]
                 want_redeemer = red.strip() if isinstance(red, str) and red.strip() else None
+                smonth = q.get("settled_month", [None])[0]
+                smo = smonth.strip() if isinstance(smonth, str) and smonth.strip() else None
+                if smo is not None and smo.lower() == "all":
+                    smo = None
                 try:
-                    codes = db.list_codes(limit, want, st, mo, offset, want_bound, bound_only, want_redeemer)
-                    filtered = db.get_filtered_sales_totals(want, st, mo, want_bound, bound_only, want_redeemer)
+                    codes = db.list_codes(limit, want, st, mo, offset, want_bound, bound_only, want_redeemer, smo)
+                    filtered = db.get_filtered_sales_totals(want, st, mo, want_bound, bound_only, want_redeemer, smo)
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 if mo is not None:
                     mo = db._norm_month(mo)
-                return self._json({"ok": True, "agent": want, "bound_to": want_bound, "bound_only": bound_only, "redeemed_by": want_redeemer, "state": st, "month": mo,
+                if smo is not None:
+                    smo = db._norm_month(smo)
+                return self._json({"ok": True, "agent": want, "bound_to": want_bound, "bound_only": bound_only, "redeemed_by": want_redeemer, "settled_month": smo, "state": st, "month": mo,
                                      "codes": codes,
                                      "filtered": filtered,
                                      "totals": db.get_sales_totals()})
@@ -2116,8 +2155,12 @@ def make_handler(db):
                 bound_only = (str(bo).strip().lower() in ("1", "true", "yes", "on")) if bo is not None else False
                 red = q.get("redeemed_by", [None])[0]
                 want_redeemer = red.strip() if isinstance(red, str) and red.strip() else None
+                smonth = q.get("settled_month", [None])[0]
+                smo = smonth.strip() if isinstance(smonth, str) and smonth.strip() else None
+                if smo is not None and smo.lower() == "all":
+                    smo = None
                 try:
-                    b = db.codes_csv(limit, want, st, mo, offset, want_bound, bound_only, want_redeemer).encode()
+                    b = db.codes_csv(limit, want, st, mo, offset, want_bound, bound_only, want_redeemer, smo).encode()
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 self.send_response(200)
