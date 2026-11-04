@@ -30,12 +30,22 @@ function spentText(h) {
   if (s <= 0 && g <= 0) return "";
   return "Last 7d: " + s + " spent · " + g + " granted";
 }
+function topupText(b, q) {
+  const left = b && b.left_total;
+  if (typeof left !== "number" || left > 0) return "";
+  const spent = (b && b.spent_total) || 0;
+  const refused = (q && q.would_block_today) || 0;
+  if (!(spent > 0 || refused > 0)) return "";
+  return "Top-up needed: balance " + left;
+}
 async function usage(s) {
   const el = $("msgUsage");
   if (!el) return;
   el.textContent = "";
   const sp = $("msgSpend");
   if (sp) sp.textContent = "";
+  const tp = $("msgTopup");
+  if (tp) tp.textContent = "";
   if (!s.inbox_url || !s.device_token) return;
   try {
     const r = await fetch(s.inbox_url.replace(/\/$/, "") + "/api/usage", { headers: { authorization: "Bearer " + s.device_token } });
@@ -44,6 +54,7 @@ async function usage(s) {
     if (!u || !u.ok) return;
     el.textContent = usageText(u);
     if (sp) sp.textContent = spentText(u.history);
+    if (tp) tp.textContent = topupText(u.balance, u.quota);
   } catch (e) { /* offline inbox: lines stay empty, nothing breaks */ }
 }
 function payText(c) {
