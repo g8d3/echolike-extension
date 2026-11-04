@@ -1163,7 +1163,7 @@ class DB:
                           else close["commission_pct"]])
         return buf.getvalue()
 
-    def list_codes(self, limit=100, agent=None, state=None, month=None, offset=0, bound_to=None, bound_only=False):
+    def list_codes(self, limit=100, agent=None, state=None, month=None, offset=0, bound_to=None, bound_only=False, redeemed_by=None):
         """Prepaid code inventory, newest first.
 
         Read-only view over grant_codes for the owner (localhost GET
@@ -1199,7 +1199,12 @@ class DB:
         /api/codes?bound_only=1 answers 'which minted codes are earmarked
         for someone instead of pass-around bearer, so the unredeemed ones
         can be chased'); truthy = only bound codes, falsy = every code.
-        agent, state, month, bound_to and bound_only combine (AND).
+        redeemed_by is an optional exact-match filter on the buyer who
+        actually redeemed (localhost GET /api/codes?redeemed_by=X answers
+        'which codes did THIS buyer redeem' when support hears 'I redeemed
+        but no balance', or verifies a bound code landed with its buyer);
+        None or blank means every code, unknown redeemers report [].
+        agent, state, month, bound_to, bound_only and redeemed_by combine (AND).
         offset is an optional row skip for paging past the 500-row cap
         (localhost GET /api/codes?limit=100&offset=100 answers 'the next
         page of the same book'); junk/negative reads as 0, beyond-the-book
@@ -1217,6 +1222,7 @@ class DB:
         limit = max(1, min(500, limit))
         want = agent.strip() if isinstance(agent, str) else ""
         want_bound = bound_to.strip() if isinstance(bound_to, str) else ""
+        want_redeemer = redeemed_by.strip() if isinstance(redeemed_by, str) else ""
         s = state.strip().lower() if isinstance(state, str) else ""
         if s in ("", "all"):
             s = ""
@@ -1238,6 +1244,9 @@ class DB:
             if want_bound:
                 conds.append("bound_to=?")
                 params.append(want_bound)
+            if want_redeemer:
+                conds.append("redeemed_by=?")
+                params.append(want_redeemer)
             if bound_only:
                 conds.append("(bound_to IS NOT NULL AND bound_to<>'')")
             if s == "redeemed":
@@ -1269,7 +1278,7 @@ class DB:
                  "bringer": r[11] or None,
                  "bound_to": r[12] or None} for r in rows]
 
-    def codes_csv(self, limit=100, agent=None, state=None, month=None, offset=0, bound_to=None, bound_only=False):
+    def codes_csv(self, limit=100, agent=None, state=None, month=None, offset=0, bound_to=None, bound_only=False, redeemed_by=None):
         """Sales book as CSV, newest first (same rows as list_codes).
 
         One header row plus one row per code for the owner (localhost GET
@@ -1286,7 +1295,9 @@ class DB:
         (None/blank = every month, malformed raises ValueError for a 400).
         bound_to is the same optional exact-match buyer filter
         (None/blank = every code). bound_only is the same optional
-        earmarked-only switch (truthy = only bound codes).
+        earmarked-only switch (truthy = only bound codes). redeemed_by is
+        the same optional exact-match redeemer filter (None/blank = every
+        code).
         offset is the same optional row skip as list_codes (paging past the
         500-row cap, junk/negative reads as 0). Totals stay
         whole-book by design (see get_sales_totals). New export only: list_codes,
@@ -1297,7 +1308,7 @@ class DB:
         buf = io.StringIO(newline="")
         w = csv.writer(buf)
         w.writerow(cols)
-        for row in self.list_codes(limit, agent, state, month, offset, bound_to, bound_only):
+        for row in self.list_codes(limit, agent, state, month, offset, bound_to, bound_only, redeemed_by):
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
@@ -1426,15 +1437,15 @@ class DB:
             for a in sorted(per_agent_day)}
         return zero
 
-    def get_filtered_sales_totals(self, agent=None, state=None, month=None, bound_to=None, bound_only=False):
+    def get_filtered_sales_totals(self, agent=None, state=None, month=None, bound_to=None, bound_only=False, redeemed_by=None):
         """Recorded revenue over the sales-book filter, read-only.
 
         {codes, redeemed, revoked, outstanding, with_sale, sales:{CUR: total}}
-        over exactly the rows list_codes(limit, agent, state, month, bound_to) would
+        over exactly the rows list_codes(limit, agent, state, month, bound_to, redeemed_by) would
         list (localhost GET /api/codes serves it as filtered next to codes,
         so the owner reads the recorded revenue for one bringer, one state,
-        one mint month or the earmarked slice without summing rows or
-        opening /api/close).
+        one mint month, the earmarked slice or one redeemer's codes without
+        summing rows or opening /api/close).
         Totals cover the whole filter, never just the ?limit= window of the
         row list. The full-book totals stay where they were (get_sales_totals
         served as totals, whole-book by design); settlement attribution
@@ -1443,7 +1454,8 @@ class DB:
         bringer the per-bringer /api/statement. Same filter vocabulary as
         list_codes: agent exact-match (None/blank = every bringer), bound_to
         exact-match (None/blank = every buyer), bound_only earmarked-only
-        switch (truthy = only bound codes), state
+        switch (truthy = only bound codes), redeemed_by exact-match
+        (None/blank = every redeemer), state
         redeemed/revoked/outstanding (None/blank/'all' = every state,
         unknown states report zeros beside the empty row list), month
         mint-month YYYY-MM on created_at (None/blank/'all' = every month,
@@ -1455,6 +1467,7 @@ class DB:
                 "with_sale": 0, "sales": {}}
         want = agent.strip() if isinstance(agent, str) else ""
         want_bound = bound_to.strip() if isinstance(bound_to, str) else ""
+        want_redeemer = redeemed_by.strip() if isinstance(redeemed_by, str) else ""
         s = state.strip().lower() if isinstance(state, str) else ""
         if s in ("", "all"):
             s = ""
@@ -1476,6 +1489,9 @@ class DB:
             if want_bound:
                 conds.append("bound_to=?")
                 params.append(want_bound)
+            if want_redeemer:
+                conds.append("redeemed_by=?")
+                params.append(want_redeemer)
             if bound_only:
                 conds.append("(bound_to IS NOT NULL AND bound_to<>'')")
             if s == "redeemed":
@@ -2058,14 +2074,16 @@ def make_handler(db):
                 want_bound = bound.strip() if isinstance(bound, str) and bound.strip() else None
                 bo = q.get("bound_only", [None])[0]
                 bound_only = (str(bo).strip().lower() in ("1", "true", "yes", "on")) if bo is not None else False
+                red = q.get("redeemed_by", [None])[0]
+                want_redeemer = red.strip() if isinstance(red, str) and red.strip() else None
                 try:
-                    codes = db.list_codes(limit, want, st, mo, offset, want_bound, bound_only)
-                    filtered = db.get_filtered_sales_totals(want, st, mo, want_bound, bound_only)
+                    codes = db.list_codes(limit, want, st, mo, offset, want_bound, bound_only, want_redeemer)
+                    filtered = db.get_filtered_sales_totals(want, st, mo, want_bound, bound_only, want_redeemer)
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 if mo is not None:
                     mo = db._norm_month(mo)
-                return self._json({"ok": True, "agent": want, "bound_to": want_bound, "bound_only": bound_only, "state": st, "month": mo,
+                return self._json({"ok": True, "agent": want, "bound_to": want_bound, "bound_only": bound_only, "redeemed_by": want_redeemer, "state": st, "month": mo,
                                      "codes": codes,
                                      "filtered": filtered,
                                      "totals": db.get_sales_totals()})
@@ -2096,8 +2114,10 @@ def make_handler(db):
                 want_bound = bound.strip() if isinstance(bound, str) and bound.strip() else None
                 bo = q.get("bound_only", [None])[0]
                 bound_only = (str(bo).strip().lower() in ("1", "true", "yes", "on")) if bo is not None else False
+                red = q.get("redeemed_by", [None])[0]
+                want_redeemer = red.strip() if isinstance(red, str) and red.strip() else None
                 try:
-                    b = db.codes_csv(limit, want, st, mo, offset, want_bound, bound_only).encode()
+                    b = db.codes_csv(limit, want, st, mo, offset, want_bound, bound_only, want_redeemer).encode()
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 self.send_response(200)
