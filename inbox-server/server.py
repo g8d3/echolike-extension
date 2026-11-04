@@ -2012,7 +2012,7 @@ class DB:
             return []
         return [{"day": r[0], "credits": r[1], "reason": r[2]} for r in rows]
 
-    def list_grants(self, limit=100, user=None, month=None, offset=0, reason=None):
+    def list_grants(self, limit=100, user=None, month=None, offset=0, reason=None, min_credits=None):
         """Manual-grant ledger for the owner, newest first, read-only.
 
         [{at, day, user_id, credits, reason}] over the grants table for the
@@ -2040,7 +2040,12 @@ class DB:
         (localhost GET /api/grants?reason=launch answers 'which grants
         funded the launch campaign', case-insensitive, same vocabulary as
         /api/codes?reason=); None, blank or non-string means every grant.
-        user, month and reason combine (AND)."""
+        min_credits is an optional floor on the grant value (localhost GET
+        /api/grants?min_credits=N answers 'which grants are worth at
+        least N credits' when the owner works the funding side of the
+        chase list, same vocabulary as /api/codes?min_credits=);
+        blank/junk/zero/negative reads as None (every grant), never an
+        error. user, month, reason and min_credits combine (AND)."""
         try:
             offset = int(offset)
         except (TypeError, ValueError):
@@ -2072,6 +2077,10 @@ class DB:
             if want_reason is not None:
                 conds.append("INSTR(lower(reason), lower(?))>0")
                 params.append(want_reason)
+            want_min = parse_min_credits(min_credits)
+            if want_min is not None:
+                conds.append("credits>=?")
+                params.append(want_min)
             where = ("WHERE " + " AND ".join(conds)) if conds else ""
             params.append(limit)
             params.append(offset)
@@ -2084,7 +2093,7 @@ class DB:
         return [{"at": r[0], "day": r[1], "user_id": r[2],
                  "credits": r[3], "reason": r[4] or ""} for r in rows]
 
-    def grants_csv(self, limit=100, user=None, month=None, offset=0, reason=None):
+    def grants_csv(self, limit=100, user=None, month=None, offset=0, reason=None, min_credits=None):
         """Manual-grant ledger as CSV, newest first (same rows as list_grants).
 
         One header row plus one row per manual grant for the owner
@@ -2100,7 +2109,9 @@ class DB:
         a 400). Limit clamped 1..500, default 100. offset is the same
         optional row skip as list_grants (paging past the 500-row cap).
         reason is the same optional campaign substring as list_grants
-        (None/blank = every grant). New export only:
+        (None/blank = every grant). min_credits is the same optional
+        value floor as list_grants (None/blank/junk = every grant).
+        New export only:
         list_grants, /api/grants, grant recording, redeem, /api/usage,
         badge, history, codes, sales totals, payouts, statement, close
         and health shapes untouched."""
@@ -2108,11 +2119,11 @@ class DB:
         buf = io.StringIO(newline="")
         w = csv.writer(buf)
         w.writerow(cols)
-        for row in self.list_grants(limit, user, month, offset, reason):
+        for row in self.list_grants(limit, user, month, offset, reason, min_credits):
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
-    def get_grant_totals(self, user=None, month=None, reason=None):
+    def get_grant_totals(self, user=None, month=None, reason=None, min_credits=None):
         """Granted-credit totals over the same filter as list_grants().
 
         {grants, credits}: how many manual grants and how many credits they
@@ -2125,6 +2136,8 @@ class DB:
         the whole filter, never just the ?limit= window of the row list.
         reason is the same optional campaign substring as list_grants
         (None/blank = every grant, totals scope to the same rows).
+        min_credits is the same optional value floor as list_grants
+        (None/blank/junk = every grant, totals scope to the same rows).
         Read-only, never an error, unknown state is all zeros. New totals
         only: list_grants, grants_csv, grant recording, redeem, /api/usage,
         badge, history, codes, sales totals, payouts, statement, close
@@ -2149,6 +2162,10 @@ class DB:
             if parse_reason(reason) is not None:
                 conds.append("INSTR(lower(reason), lower(?))>0")
                 params.append(parse_reason(reason))
+            want_min = parse_min_credits(min_credits)
+            if want_min is not None:
+                conds.append("credits>=?")
+                params.append(want_min)
             where = ("WHERE " + " AND ".join(conds)) if conds else ""
             row = self.c.execute(
                 "SELECT COUNT(*), COALESCE(SUM(credits),0) FROM grants "
@@ -2714,9 +2731,10 @@ def make_handler(db):
                 except ValueError:
                     offset = 0
                 want_reason = parse_reason(q.get("reason", [None])[0])
+                want_min = parse_min_credits(q.get("min_credits", [None])[0])
                 try:
-                    rows = db.list_grants(limit, want, month, offset, want_reason)
-                    totals = db.get_grant_totals(want, month, want_reason)
+                    rows = db.list_grants(limit, want, month, offset, want_reason, want_min)
+                    totals = db.get_grant_totals(want, month, want_reason, want_min)
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 mon = month.strip() if isinstance(month, str) and month.strip() else None
@@ -2726,6 +2744,7 @@ def make_handler(db):
                     mon = db._norm_month(mon)
                 return self._json({"ok": True, "user": want, "month": mon,
                                      "reason": want_reason,
+                                     "min_credits": want_min,
                                      "grants": rows,
                                      "totals": totals})
             if u.path == "/api/grants.csv":
@@ -2745,8 +2764,9 @@ def make_handler(db):
                 except ValueError:
                     offset = 0
                 want_reason = parse_reason(q.get("reason", [None])[0])
+                want_min = parse_min_credits(q.get("min_credits", [None])[0])
                 try:
-                    b = db.grants_csv(limit, want, month, offset, want_reason).encode()
+                    b = db.grants_csv(limit, want, month, offset, want_reason, want_min).encode()
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 self.send_response(200)
