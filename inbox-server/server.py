@@ -1608,7 +1608,7 @@ class DB:
             return {"grants": 0, "credits": 0}
         return {"grants": row[0] if row else 0, "credits": row[1] if row else 0}
 
-    def get_reckoning(self):
+    def get_reckoning(self, needs_topup_only=False):
         """Whole cash register in one read, newest shape additive only.
 
         {sales, payouts, grants, quota}: the three whole-book totals side by side
@@ -1627,11 +1627,18 @@ class DB:
         used or wanted service — the bill-first queue) in the same row,
         biggest spender first, capped
         at 100 — the one top-up table, no hand join against by_user)
-        plus needs_topup_n (how many by_buyer rows flag needs_topup —
-        the bill-first headcount, so the queued quota decision reads
-        who to bill first without counting flagged rows; counted over
-        the served by_buyer window, capped at 100 like the table).
-        in v1; read-only, never an error, empty book reads zeros.
+        plus needs_topup_n (how many served by_buyer rows flag
+        needs_topup — the bill-first headcount, so the queued quota
+        decision reads who to bill first without counting flagged rows;
+        counted over the served by_buyer window, capped at 100 like the
+        table). needs_topup_only=True windows quota.by_buyer down to
+        the flagged rows only (localhost GET /api/reckoning?needs_topup=1
+        answers 'who do I bill first' in one call instead of scanning
+        the table; junk reads as off, so no param keeps the previous
+        rows byte-identical); needs_topup_n then counts the served
+        flagged window, while sales, payouts, grants and every other
+        aggregate stay whole-book. Read-only, never an error, empty
+        book reads zeros.
         New totals only: list/get rows, /api/codes, /api/payouts,
         /api/grants, /api/usage, badge, history, statement, close
         and health shapes untouched."""
@@ -1657,9 +1664,13 @@ class DB:
         except sqlite3.Error:
             quota["by_user"] = []
         try:
-            quota["by_buyer"] = self.get_spend_by_buyer()
+            by_buyer = self.get_spend_by_buyer()
         except sqlite3.Error:
-            quota["by_buyer"] = []
+            by_buyer = []
+        if needs_topup_only:
+            by_buyer = [e for e in by_buyer
+                        if isinstance(e, dict) and e.get("needs_topup")]
+        quota["by_buyer"] = by_buyer
         try:
             quota["needs_topup_n"] = sum(
                 1 for e in quota.get("by_buyer") or []
@@ -1668,7 +1679,7 @@ class DB:
             quota["needs_topup_n"] = 0
         return {"sales": sales, "payouts": payouts, "grants": grants, "quota": quota}
 
-    def reckoning_csv(self):
+    def reckoning_csv(self, needs_topup_only=False):
         """Whole cash register as CSV, one summary row per figure.
 
         One header row plus one row per figure for the owner (localhost
@@ -1690,8 +1701,15 @@ class DB:
         Aggregates always render (zeros on
         an empty book, never an error); per-currency and per-agent rows
         render only when the book holds them. None renders as an empty
-        cell, values are csv-quoted as needed. Whole-book, no filters in
-        v1; read-only. New export only: get_reckoning, /api/reckoning,
+        cell, values are csv-quoted as needed. Whole-book except the
+        optional bill-first window: needs_topup_only=True serves only
+        the flagged buyers' spend_user_* rows (localhost GET
+        /api/reckoning.csv?needs_topup=1 is the spreadsheet of the same
+        bill-first queue; junk reads as off, so no param keeps the
+        previous rows byte-identical) while every aggregate row — sales,
+        commission, payouts, grants, would_block totals and
+        needs_topup_buyers (which then counts the served flagged
+        window) — stays as get_reckoning() serves it. Read-only. New export only: get_reckoning, /api/reckoning,
         rows, totals, /api/usage, badge, history, statement, close and
         health shapes untouched."""
         cols = ("section", "metric", "agent", "currency", "value")
@@ -1699,7 +1717,7 @@ class DB:
         w = csv.writer(buf)
         w.writerow(cols)
         try:
-            r = self.get_reckoning()
+            r = self.get_reckoning(needs_topup_only)
         except sqlite3.Error:
             r = {"sales": {}, "payouts": {}, "grants": {}, "quota": {}}
         sales = r.get("sales") or {}
@@ -2211,12 +2229,16 @@ def make_handler(db):
                 peer = (self.client_address[0] if self.client_address else "")
                 if peer not in ("127.0.0.1", "::1"):
                     return self._json({"ok": False, "error": "reckoning only from this machine"}, 403)
-                return self._json({"ok": True, **db.get_reckoning()})
+                q = parse_qs(u.query)
+                flag = (q.get("needs_topup", [""])[0] or "").strip().lower() in ("1", "true", "yes")
+                return self._json({"ok": True, **db.get_reckoning(flag)})
             if u.path == "/api/reckoning.csv":
                 peer = (self.client_address[0] if self.client_address else "")
                 if peer not in ("127.0.0.1", "::1"):
                     return self._json({"ok": False, "error": "reckoning only from this machine"}, 403)
-                b = db.reckoning_csv().encode()
+                q = parse_qs(u.query)
+                flag = (q.get("needs_topup", [""])[0] or "").strip().lower() in ("1", "true", "yes")
+                b = db.reckoning_csv(flag).encode()
                 self.send_response(200)
                 self.send_header("content-type", "text/csv; charset=utf-8")
                 self.send_header("content-length", str(len(b)))
