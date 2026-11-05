@@ -190,6 +190,40 @@ async function publicar(item, c) {
 }
 // Cola en storage: sobrevive a que Chrome duerma el service worker.
 async function encolar(item) { const s = await ext.storage.local.get({ cola: [] }); s.cola.push(item); await ext.storage.local.set({ cola: s.cola }); }
+// ---- Enrichment links (v2.10): resolve t.co without any API, using plain HTTP.
+// A 301 from t.co is public (no login needed). Article/thread targets become pending
+// entries: when the reader later opens that page, content.js scrapes the rendered
+// text (their own logged-in session) and sends it back as kind "article"/"followup".
+const RESOLVER_MS = 6000;
+async function resolverEnlace(href) {
+  try {
+    const r = await Promise.race([fetch(href, { redirect: "manual" }), new Promise((_, no) => setTimeout(() => no(new Error("t")), RESOLVER_MS))]);
+    const loc = r.headers && r.headers.get && r.headers.get("location");
+    if (loc) return String(loc).slice(0, 500);
+  } catch (e) {}
+  return null;
+}
+async function resolverEnlaces(item) {
+  try {
+    const links = item && item.links;
+    if (!item || !Array.isArray(links) || !links.length) return item;
+    for (const l of links) {
+      if (!l || l.resuelto || typeof l.href !== "string" || l.href.indexOf("https://t.co/") !== 0) continue;
+      const url = await resolverEnlace(l.href);
+      if (url) l.resuelto = url;
+    }
+    const arts = links.map((l) => l.resuelto || "").filter((u) => /\/i\/article\/(\d+)/.test(u));
+    if (arts.length && (item.kind === "like" || item.kind === "bookmark") && item.id) {
+      const s = await ext.storage.local.get({ pending_links: {} });
+      const p = s.pending_links || {};
+      for (const u of arts) { const m = u.match(/\/i\/article\/(\d+)/); if (m) p[m[1]] = { tweet: String(item.id), handle: item.handle || null, url: u, at: new Date().toISOString() }; }
+      const ks = Object.keys(p).slice(-50);   // bounded: the map is a hint, not an archive
+      const rec = {}; for (const k of ks) rec[k] = p[k];
+      await ext.storage.local.set({ pending_links: rec });
+    }
+  } catch (e) {}
+  return item;
+}
 let vaciando = null;
 async function vaciarLegacy(cola) { // ntfy path, unchanged from 2.7
   const c = await cfg(); const { ntfy429hasta } = await ext.storage.local.get({ ntfy429hasta: 0 }); let res = { ok: true };
@@ -276,6 +310,15 @@ async function enviar(item) {
   if (item.kind === "ping" && mode !== "legacy") { // direct ping = inbox health check, never queued
     try { const c = await cfgDirect(); if (c.error) return { ok: false, uid: item.uid, error: c.error }; await pingDirecto(c); await anotar(item, "recibido"); return { ok: true, uid: item.uid, direct: true }; }
     catch (e) { const msg = String(e.message || e); await anotar(item, "error", msg); return { ok: false, uid: item.uid, error: msg }; }
+  }
+  if (item.kind === "like" || item.kind === "bookmark") {
+    await resolverEnlaces(item);
+    if (item.truncated && item.id) {   // detail-page re-capture list: bounded, ids only
+      const s = await ext.storage.local.get({ truncated_recent: [] });
+      const l = (s.truncated_recent || []).filter((x) => x && String(x.id) !== String(item.id));
+      l.push({ id: String(item.id), chars: (item.text || "").length, at: new Date().toISOString() });
+      await ext.storage.local.set({ truncated_recent: l.slice(-50) });
+    }
   }
   await anotar(item, "en cola"); await encolar(item);
   const r = await vaciar(); return Object.assign({ uid: item.uid }, r);

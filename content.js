@@ -63,6 +63,60 @@
     };
   }
 
+  // Outbound links of the post: t.co href + title/display text + photo urls (capped).
+  // Pure over the article node, so it is unit-testable with fixtures.
+  function outgoingLinks(art) {
+    const links = [];
+    try {
+      const txt = art.querySelector('[data-testid="tweetText"]') || art;
+      for (const a of txt.querySelectorAll('a[href*="t.co"]')) {
+        if (links.length >= 10) break;
+        const href = a.getAttribute("href") || "";
+        if (!href || links.some((l) => l.href === href)) continue;
+        links.push({ href, title: (a.getAttribute("title") || "").slice(0, 500),
+          texto: (a.innerText || a.textContent || "").slice(0, 200) });
+      }
+    } catch (e) {}
+    return links;
+  }
+  function mediaInfo(art) {
+    const fotos = [];
+    try {
+      for (const img of art.querySelectorAll('a[href*="/photo/"] img[src], [data-testid="tweetPhoto"] img[src]')) {
+        if (fotos.length >= 4) break;
+        const src = img.getAttribute("src") || "";
+        if (src && fotos.indexOf(src) < 0) fotos.push(src);
+      }
+    } catch (e) {}
+    let video = false;
+    try { video = !!art.querySelector('[data-testid="videoPlayer"]'); } catch (e) {}
+    return { fotos, video };
+  }
+  // X truncates long posts behind a "Show more" affordance. Returns true when the
+  // visible text is known-incomplete, so the backend marks the capture, not the content.
+  function isTruncated(art) {
+    try {
+      const txt = art.querySelector('[data-testid="tweetText"]');
+      if (!txt) return false;
+      const s = (txt.innerText || txt.textContent || "");
+      return /show more|mostrar m.s|ver m.s|(…|\.\.\.)\s*$|show this thread|ver este hilo/i.test(s) ||
+        !!txt.querySelector('span[class*="showMore"], div[role="button"]');
+    } catch (e) { return false; }
+  }
+  // Click the inline expander (no navigation) so a delayed re-read gets the full post.
+  function expandPost(art) {
+    try {
+      const txt = art.querySelector('[data-testid="tweetText"]');
+      if (!txt) return false;
+      for (const el of txt.querySelectorAll('span, div[role="button"]')) {
+        if (/^\s*(show more|mostrar m.s|ver m.s)\s*$/i.test(el.innerText || el.textContent || "")) {
+          const btn = el.closest('[role="button"]') || el;
+          btn.click(); return true;
+        }
+      }
+    } catch (e) {}
+    return false;
+  }
   function extraer(boton, loc) {
     const art = boton.closest("article") || boton.closest('[data-testid="tweet"]');
     if (!art) return null;
@@ -79,10 +133,12 @@
     if (!m) return null;
     const txtEl = art.querySelector('[data-testid="tweetText"]');
     const time = a && a.querySelector("time");
+    const truncated = isTruncated(art);
     return Object.assign({
       id: m[2], handle: m[1], url: `https://x.com/${m[1]}/status/${m[2]}`,
       text: txtEl ? txtEl.innerText || txtEl.textContent || "" : "",
-      tweet_time: time ? time.getAttribute("datetime") : null
+      tweet_time: time ? time.getAttribute("datetime") : null,
+      truncated, links: outgoingLinks(art), media: mediaInfo(art)
     }, metricas(art));
   }
 
@@ -126,7 +182,31 @@
     return null;
   }
 
-  const api = { botonAccion, extraer, evento, ACCIONES, esEditable, teclaAbreNota, teclaEsLike, teclaEsBookmark, itemNota, accionTecla, HOLD_MS, N_MS, parseCount, metricas };
+  // Two-phase send for truncated posts: ship the capture now, click the inline
+  // expander, re-read after X repaints, and follow up with kind "followup" only
+  // when the text actually grew. The backend merges it into the same like.
+  const FOLLOWUP_MS = 800;
+  function sendWithFollowup(ev, art, mandarFn) {
+    mandarFn(ev);
+    try {
+      if (!ev || !ev.truncated || !art || !art.isConnected) return;
+      if (!expandPost(art)) return;
+      const likeBtn = art.querySelector('[data-testid="like"],[data-testid="unlike"]');
+      setTimeout(() => {
+        try {
+          if (!art.isConnected || !likeBtn || !likeBtn.isConnected) return;
+          const d2 = extraer(likeBtn, null);
+          if (!d2 || d2.id !== ev.id) return;
+          if ((d2.text || "").length > (ev.text || "").length + 20) {
+            mandarFn({ v: 2, kind: "followup", clicked_at: new Date().toISOString(),
+              id: d2.id, handle: d2.handle, url: d2.url, text: d2.text,
+              tweet_time: d2.tweet_time, truncated: d2.truncated, links: d2.links, media: d2.media });
+          }
+        } catch (e) {}
+      }, FOLLOWUP_MS);
+    } catch (e) {}
+  }
+  const api = { botonAccion, extraer, evento, ACCIONES, esEditable, teclaAbreNota, teclaEsLike, teclaEsBookmark, itemNota, accionTecla, HOLD_MS, N_MS, parseCount, metricas, outgoingLinks, mediaInfo, isTruncated, expandPost, sendWithFollowup, FOLLOWUP_MS, articlePage, articleText, detailId };
   if (typeof module !== "undefined") module.exports = api;
   root.EchoLike = api;
 
@@ -140,6 +220,80 @@
     if (!t) { t = root.document.createElement("div"); t.id = "echolike-toast"; root.document.body.appendChild(t); }
     t.textContent = msg; t.className = ok ? "ok" : "err"; t.style.opacity = "1";
     clearTimeout(t._h); t._h = setTimeout(() => (t.style.opacity = "0"), ok ? 2500 : 6000);
+  }
+  // ---- Passive enrichment (v2.10): the reader's own session already rendered the page.
+  // Article pages and tweet-detail views are scraped once per load and sent back keyed
+  // to the liked tweet. The backend merges them and NEVER creates likes from views.
+  function articlePage(path) { const m = String(path || "").match(/\/i\/article\/(\d+)/); return (m && m[1]) || null; }
+  function articleText(doc) {
+    let title = "", body = "";
+    try {
+      const h1 = doc.querySelector("h1");
+      title = h1 ? (h1.innerText || h1.textContent || "").trim().slice(0, 300) : "";
+      const c = doc.querySelector("article") || doc.querySelector("main") || doc.body;
+      body = c ? (c.innerText || c.textContent || "") : "";
+    } catch (e) {}
+    body = String(body).replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim().slice(0, 100000);
+    return { title, body };
+  }
+  function detailId(path) { const m = String(path || "").match(/^\/([A-Za-z0-9_]{1,15})\/status\/(\d+)(?:[/?#]|$)/); return m ? { handle: m[1], id: m[2] } : null; }
+  let enrichDone = null;
+  function enrichDetail() {
+    try {
+      const d = detailId(root.location.pathname);
+      if (!d || enrichDone === d.id) return;
+      ext.storage.local.get({ truncated_recent: [] }, (s) => {
+        try {
+          const ent = (s.truncated_recent || []).find((x) => x && String(x.id) === d.id);
+          if (!ent) return;
+          let art = null;
+          for (const a of root.document.querySelectorAll("article")) {
+            try { if (a.querySelector(`a[href$="/status/${d.id}"] time`)) { art = a; break; } } catch (e) {}
+          }
+          const like = art && art.querySelector('[data-testid="like"],[data-testid="unlike"]');
+          const d2 = like && extraer(like, root.location.pathname);
+          if (!d2 || d2.id !== d.id) return;
+          if ((d2.text || "").length > (ent.chars || 0) + 20) {
+            enrichDone = d.id;
+            mandar({ v: 2, kind: "followup", clicked_at: new Date().toISOString(),
+              id: d2.id, handle: d2.handle, url: d2.url, text: d2.text,
+              tweet_time: d2.tweet_time, truncated: d2.truncated, links: d2.links, media: d2.media });
+          }
+        } catch (e) {}
+      });
+    } catch (e) {}
+  }
+  function enrichPage() {
+    try {
+      const aid = articlePage(root.location.pathname);
+      if (aid) {
+        // Articles are sent unconditionally: the like may predate the pending map
+        // (or the browser may have cleared it). The backend matches the article to
+        // the liked tweet by resolving its t.co link server-side — no API, plain HTTP.
+        if (enrichDone === ("a" + aid)) return;
+        ext.storage.local.get({ pending_links: {} }, (s) => {
+          try {
+            const p = (s.pending_links || {})[aid] || {};
+            const a = articleText(root.document);
+            if ((a.body || "").length > 200) {
+              enrichDone = "a" + aid;
+              mandar({ v: 2, kind: "article", clicked_at: new Date().toISOString(),
+                id: p.tweet ? String(p.tweet) : ("article:" + aid),
+                handle: p.handle || null, url: p.url || ("https://x.com/i/article/" + aid),
+                article_id: aid, title: a.title, body: a.body, truncated: a.body.length >= 100000 });
+              if (p.tweet) {
+                const resto = Object.assign({}, s.pending_links); delete resto[aid];
+                ext.storage.local.set({ pending_links: resto });
+              }
+            }
+          } catch (e) {}
+        });
+        setTimeout(enrichPage, 3000);   // React paints late; one retry, send-once guarded
+        return;
+      }
+      enrichDetail();
+      setTimeout(enrichDetail, 3000);   // React paints late; one retry, send-once guarded
+    } catch (e) {}
   }
   function mandar(item) {
     const t0 = performance.now();
@@ -161,7 +315,7 @@
     try {
       if (e.target.closest && e.target.closest(".echolike-mic,.echolike-pen,.echolike-nota")) return;
       const ev = evento(e.target, root.location.pathname);
-      if (ev) { mandar(ev); if (ev.kind === "like") { ultimoLike = { t: Date.now(), d: ev, boton: botonAccion(e.target) }; } }
+      if (ev) { const art = e.target.closest && e.target.closest("article"); sendWithFollowup(ev, art, mandar); if (ev.kind === "like") { ultimoLike = { t: Date.now(), d: ev, boton: botonAccion(e.target) }; } }
     } catch (err) { console.warn("EchoLike", err); }
   }, true);   // fase de captura: antes de que React cambie el testid
 
@@ -278,7 +432,7 @@
       const d = like && extraer(like, root.location.pathname);
       if (!acc || !d) return;
       const ev = Object.assign({ v: 2, kind: acc, clicked_at: new Date().toISOString() }, d);
-      mandar(ev);
+      sendWithFollowup(ev, art, mandar);
       if (acc === "like") ultimoLike = { t: Date.now(), d: ev, boton: b };
     } catch (err) { console.warn("EchoLike", err); }
   }, true);
@@ -326,4 +480,5 @@
     const f = () => { if (c.mic) ponerMics(); if (c.notas) ponerPlumas(); };
     f(); new MutationObserver(f).observe(root.document.body, { childList: true, subtree: true });
   });
+  try { enrichPage(); } catch (e) {}
 })(typeof window !== "undefined" ? window : globalThis);
