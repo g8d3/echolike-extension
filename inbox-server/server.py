@@ -348,6 +348,16 @@ class DB:
         # (founder free credits, promo, manual top-ups after a crypto payment
         # is seen on-chain). Bookkeeping only: granting moves no money.
         self.c.execute("CREATE TABLE IF NOT EXISTS grants (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, day TEXT NOT NULL, user_id TEXT NOT NULL, credits INTEGER NOT NULL, reason TEXT NOT NULL DEFAULT '')")
+        # Funding code stamp: the prepaid code whose redeem created this
+        # grant row (code, '' = manual grant or pre-stamp row). redeem_code
+        # writes it, so the funding side of the cash register reconciles
+        # against the sales book 1:1 (which sale funded which credits)
+        # instead of by reason substring. Bookkeeping only: stamping moves
+        # no money and changes no gate. Added 2026-11-04; old rows backfill
+        # '' and read as manual (as before).
+        _gcols = {r[1] for r in self.c.execute("PRAGMA table_info(grants)")}
+        if "code" not in _gcols:
+            self.c.execute("ALTER TABLE grants ADD COLUMN code TEXT NOT NULL DEFAULT ''")
         # Referral attribution: who brought each user. First touch wins and is
         # never overwritten (last-touch theft and self-dealing pay nothing).
         # Set alongside a grant, read by /api/usage for commission payouts.
@@ -881,8 +891,8 @@ class DB:
         if isinstance(row[5], str) and row[5] and row[5] != user_id:
             self.c.execute("INSERT OR IGNORE INTO referrals (user_id, referred_by, at) VALUES (?,?,?)",
                            (user_id, row[5][:120], utcnow()))
-        self.c.execute("INSERT INTO grants (at, day, user_id, credits, reason) VALUES (?,?,?,?,?)",
-                       (utcnow(), today(), user_id, row[0], row[1]))
+        self.c.execute("INSERT INTO grants (at, day, user_id, credits, reason, code) VALUES (?,?,?,?,?,?)",
+                       (utcnow(), today(), user_id, row[0], row[1], code))
         self.c.execute("UPDATE grant_codes SET redeemed_by=?, redeemed_at=? WHERE code=?",
                        (user_id, utcnow(), code))
         self.c.commit()
@@ -2033,13 +2043,14 @@ class DB:
     def list_grants(self, limit=100, user=None, month=None, offset=0, reason=None, min_credits=None, max_credits=None, day=None, referred_by=None):
         """Manual-grant ledger for the owner, newest first, read-only.
 
-        [{at, day, user_id, credits, reason}] over the grants table for the
+        [{at, day, user_id, credits, reason, code}] over the grants table for the
         owner (localhost GET /api/grants): one row per manual grant the owner
         recorded (founder free credits, promo, a top-up after a crypto payment
-        is seen on-chain), so the funding side of the cash register can be
+        is seen on-chain, code ''), so the funding side of the cash register can be
         checked line by line. Redeemed prepaid codes are not rows here: they
         flow through the same grants table via redeem_code and do appear, each
-        carrying its mint reason. Never an error, unknown state is an empty
+        carrying its mint reason and the code that funded it (code, so the
+        funding row ties to its sales-book row 1:1). Never an error, unknown state is an empty
         list. Limit clamped to 1..500, default 100. user is an optional
         exact-match filter (localhost GET /api/grants?user=X answers 'what
         did I give this user?' without grepping the full list); None or blank
@@ -2139,22 +2150,23 @@ class DB:
             params.append(limit)
             params.append(offset)
             rows = self.c.execute(
-                "SELECT at, day, user_id, credits, reason "
+                "SELECT at, day, user_id, credits, reason, code "
                 "FROM grants " + where + " ORDER BY id DESC LIMIT ? OFFSET ?",
                 tuple(params)).fetchall()
         except sqlite3.Error:
             return []
         return [{"at": r[0], "day": r[1], "user_id": r[2],
-                 "credits": r[3], "reason": r[4] or ""} for r in rows]
+                 "credits": r[3], "reason": r[4] or "", "code": r[5] or ""} for r in rows]
 
     def grants_csv(self, limit=100, user=None, month=None, offset=0, reason=None, min_credits=None, max_credits=None, day=None, referred_by=None):
         """Manual-grant ledger as CSV, newest first (same rows as list_grants).
 
         One header row plus one row per manual grant for the owner
-        (localhost GET /api/grants.csv): at,day,user_id,credits,reason —
+        (localhost GET /api/grants.csv): at,day,user_id,credits,reason,code —
         the same rows list_grants() reports, so the funding side of the
         cash register reconciles in a spreadsheet without touching JSON.
-        Redeemed prepaid codes appear here too (same table, mint reason).
+        Redeemed prepaid codes appear here too (same table, mint reason,
+        funding code stamped). Manual and pre-stamp rows render code empty.
         None renders as an empty cell, values are csv-quoted as needed.
         user is the same optional exact-match filter as list_grants
         (None/blank = every user, unknown users header only, never an
@@ -2173,10 +2185,11 @@ class DB:
         list_grants (None/blank = every grant, unknown bringers header
         only, never an error).
         New export only:
-        list_grants, /api/grants, grant recording, redeem, /api/usage,
+        /api/grants rows carry the same code stamp (same shape),
+        grant recording, redeem, /api/usage,
         badge, history, codes, sales totals, payouts, statement, close
         and health shapes untouched."""
-        cols = ("at", "day", "user_id", "credits", "reason")
+        cols = ("at", "day", "user_id", "credits", "reason", "code")
         buf = io.StringIO(newline="")
         w = csv.writer(buf)
         w.writerow(cols)
