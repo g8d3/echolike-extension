@@ -388,6 +388,28 @@ def parse_max_settled(v):
     return n if n > 0 else None
 
 
+def parse_min_spent(v):
+    """Minimum-spent filter for the owner reckoning: float or None.
+
+    A positive number keeps only by_buyer rows whose lifetime spent is at
+    least that much (localhost GET /api/reckoning?min_spent=50 answers
+    'which buyers already spent at least 50' when the owner ranks the
+    top-up table by money instead of scrolling every small buyer, same
+    vocabulary as /api/codes?min_sale=, /api/payouts?min_paid= and
+    /api/close?min_settled=); None = every buyer. Accepts real
+    ints/floats for direct DB calls; blank/junk/zero/negative reads as
+    None (every buyer), never an error."""
+    if isinstance(v, bool):
+        return None
+    if v is None:
+        return None
+    try:
+        n = float(v.strip() if isinstance(v, str) else v)
+    except (TypeError, ValueError, AttributeError):
+        return None
+    return n if n > 0 else None
+
+
 def is_private(ip):
     """LAN, Tailscale and loopback: places where getting in already means trust."""
     try:
@@ -2727,7 +2749,7 @@ class DB:
             return {"grants": 0, "credits": 0}
         return {"grants": row[0] if row else 0, "credits": row[1] if row else 0}
 
-    def get_reckoning(self, needs_topup_only=False):
+    def get_reckoning(self, needs_topup_only=False, min_spent=None):
         """Whole cash register in one read, newest shape additive only.
 
         {sales, payouts, grants, quota}: the three whole-book totals side by side
@@ -2756,7 +2778,17 @@ class DB:
         the table; junk reads as off, so no param keeps the previous
         rows byte-identical); needs_topup_n then counts the served
         flagged window, while sales, payouts, grants and every other
-        aggregate stay whole-book. Read-only, never an error, empty
+        aggregate stay whole-book. min_spent is an optional spent-value
+        floor over quota.by_buyer (localhost GET /api/reckoning?min_spent=50
+        answers 'which buyers already spent at least 50' when the owner
+        ranks the top-up table by money; None/blank/junk/zero/negative
+        means every buyer, same vocabulary as /api/codes?min_sale=,
+        /api/payouts?min_paid= and /api/close?min_settled=, never an
+        error; the floor is not echoed, mirroring the flag, so no param
+        keeps the previous rows byte-identical). The two windows combine
+        (AND): the bill-first queue inside one money band. needs_topup_n
+        counts the served window in every case.
+        Read-only, never an error, empty
         book reads zeros.
         New totals only: list/get rows, /api/codes, /api/payouts,
         /api/grants, /api/usage, badge, history, statement, close
@@ -2789,6 +2821,12 @@ class DB:
         if needs_topup_only:
             by_buyer = [e for e in by_buyer
                         if isinstance(e, dict) and e.get("needs_topup")]
+        want_min = parse_min_spent(min_spent)
+        if want_min is not None:
+            by_buyer = [e for e in by_buyer
+                        if isinstance(e, dict)
+                        and isinstance(e.get("spent"), (int, float))
+                        and e.get("spent") >= want_min]
         quota["by_buyer"] = by_buyer
         try:
             quota["needs_topup_n"] = sum(
@@ -2798,7 +2836,7 @@ class DB:
             quota["needs_topup_n"] = 0
         return {"sales": sales, "payouts": payouts, "grants": grants, "quota": quota}
 
-    def reckoning_csv(self, needs_topup_only=False):
+    def reckoning_csv(self, needs_topup_only=False, min_spent=None):
         """Whole cash register as CSV, one summary row per figure.
 
         One header row plus one row per figure for the owner (localhost
@@ -2825,9 +2863,13 @@ class DB:
         the flagged buyers' spend_user_* rows (localhost GET
         /api/reckoning.csv?needs_topup=1 is the spreadsheet of the same
         bill-first queue; junk reads as off, so no param keeps the
-        previous rows byte-identical) while every aggregate row — sales,
+        previous rows byte-identical) and min_spent=N serves only the
+        buyers whose lifetime spent is at least N (localhost GET
+        /api/reckoning.csv?min_spent=50; junk reads as off, same
+        vocabulary as /api/codes?min_sale=; the two windows combine)
+        while every aggregate row — sales,
         commission, payouts, grants, would_block totals and
-        needs_topup_buyers (which then counts the served flagged
+        needs_topup_buyers (which then counts the served
         window) — stays as get_reckoning() serves it. Read-only. New export only: get_reckoning, /api/reckoning,
         rows, totals, /api/usage, badge, history, statement, close and
         health shapes untouched."""
@@ -2836,7 +2878,7 @@ class DB:
         w = csv.writer(buf)
         w.writerow(cols)
         try:
-            r = self.get_reckoning(needs_topup_only)
+            r = self.get_reckoning(needs_topup_only, min_spent)
         except sqlite3.Error:
             r = {"sales": {}, "payouts": {}, "grants": {}, "quota": {}}
         sales = r.get("sales") or {}
@@ -3494,14 +3536,16 @@ def make_handler(db):
                     return self._json({"ok": False, "error": "reckoning only from this machine"}, 403)
                 q = parse_qs(u.query)
                 flag = (q.get("needs_topup", [""])[0] or "").strip().lower() in ("1", "true", "yes")
-                return self._json({"ok": True, **db.get_reckoning(flag)})
+                floor = parse_min_spent((q.get("min_spent", [""])[0] or "").strip() or None)
+                return self._json({"ok": True, **db.get_reckoning(flag, floor)})
             if u.path == "/api/reckoning.csv":
                 peer = (self.client_address[0] if self.client_address else "")
                 if peer not in ("127.0.0.1", "::1"):
                     return self._json({"ok": False, "error": "reckoning only from this machine"}, 403)
                 q = parse_qs(u.query)
                 flag = (q.get("needs_topup", [""])[0] or "").strip().lower() in ("1", "true", "yes")
-                b = db.reckoning_csv(flag).encode()
+                floor = parse_min_spent((q.get("min_spent", [""])[0] or "").strip() or None)
+                b = db.reckoning_csv(flag, floor).encode()
                 self.send_response(200)
                 self.send_header("content-type", "text/csv; charset=utf-8")
                 self.send_header("content-length", str(len(b)))
