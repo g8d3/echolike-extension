@@ -1254,10 +1254,10 @@ class DB:
         return {"payouts": n[0] if n else 0,
                 "paid": {r[0]: round(r[1], 9) for r in rows}}
 
-    def get_statement(self, agent, limit=100, month=None, offset=0):
+    def get_statement(self, agent, limit=100, month=None, offset=0, day=None):
         """Per-bringer payout statement in one read, newest payouts first.
 
-        {agent, month, settled, owed, paid, payable, daily, payouts, totals}
+        {agent, month, day, settled, owed, paid, payable, daily, payouts, totals}
         for the owner (localhost GET /api/statement?agent=X): the payout
         moment on one screen — what this bringer's clients settled, what
         the bringer is owed at the env rate, what was already paid off-band,
@@ -1271,24 +1271,31 @@ class DB:
         bringer this month'); None, blank or 'all' means every month, a
         malformed month raises ValueError (the route answers 400, the same
         vocabulary as /api/close, /api/codes?month=, /api/payouts?month=
-        and /api/grants?month=). offset is the same optional row skip as
-        list_payouts (localhost GET /api/statement?agent=X&limit=L&offset=O
-        answers 'the next page of this bringer's payments' past the 500-row
-        cap); junk/negative reads as 0, beyond-the-book reads [], totals
-        ignore it (the bringer's whole payment ledger, never the window).
-        month scopes the payment rows and their totals only; settled, owed,
+        and /api/grants?month=). day is an optional exact-day filter in
+        YYYY-MM-DD on the payment day (localhost GET
+        /api/statement?agent=X&day=YYYY-MM-DD answers 'what did I pay
+        this bringer today'); None, blank or 'all' means every day, a
+        malformed day raises ValueError (the route answers 400, the same
+        vocabulary as /api/payouts?day= and /api/grants?day=), and it
+        combines with agent and month as AND. offset is the same optional
+        row skip as list_payouts (localhost GET
+        /api/statement?agent=X&limit=L&offset=O answers 'the next page of
+        this bringer's payments' past the 500-row cap); junk/negative
+        reads as 0, beyond-the-book reads [], totals ignore it (the
+        bringer's whole payment ledger, never the window). month and day
+        scope the payment rows and their totals only; settled, owed,
         paid, payable and daily stay lifetime
         (the settled reckoning for one month is the per-month /api/close).
-        Slices of get_sales_totals() plus list_payouts(limit, agent, month)
-        plus get_payout_totals(agent, month); no new table, never an error
-        except the malformed month, unknown agents report empty maps, []
-        and zero totals. Blank agents report agent None with everything
-        empty and zero totals (the HTTP layer refuses them with 400: a
-        statement is per-bringer, the full ledger already answers
-        everyone). No month keeps the previous rows byte-identical (only
-        the additive month: None echo is new); no offset keeps them
-        byte-identical too (offset only windows the row list, it is not
-        echoed)."""
+        Slices of get_sales_totals() plus list_payouts(limit, agent, month,
+        offset, day) plus get_payout_totals(agent, month, day); no new
+        table, never an error except the malformed month or day, unknown
+        agents report empty maps, [] and zero totals. Blank agents report
+        agent None with everything empty and zero totals (the HTTP layer
+        refuses them with 400: a statement is per-bringer, the full ledger
+        already answers everyone). No month and no day keep the previous
+        rows byte-identical (only the additive month: None and day: None
+        echoes are new); no offset keeps them byte-identical too (offset
+        only windows the row list, it is not echoed)."""
         want = agent.strip() if isinstance(agent, str) else ""
         mon = month.strip() if isinstance(month, str) and month.strip() else None
         if isinstance(mon, str) and mon.lower() == "all":
@@ -1297,8 +1304,15 @@ class DB:
             mon = self._norm_month(mon)
             if mon is None:
                 raise ValueError("month must be YYYY-MM")
+        dd = day.strip() if isinstance(day, str) and day.strip() else None
+        if isinstance(dd, str) and dd.lower() == "all":
+            dd = None
+        if dd is not None:
+            dd = self._norm_day(dd)
+            if dd is None:
+                raise ValueError("day must be YYYY-MM-DD")
         if not want:
-            return {"agent": None, "month": mon, "settled": {},
+            return {"agent": None, "month": mon, "day": dd, "settled": {},
                     "owed": {}, "paid": {}, "payable": {}, "daily": [],
                     "payouts": [],
                     "totals": {"payouts": 0, "paid": {}}}
@@ -1307,14 +1321,14 @@ class DB:
         except sqlite3.Error:
             t = {"by_referrer": {}, "owed": {}, "paid": {},
                  "payable": {}, "by_referrer_daily": {}}
-        return {"agent": want, "month": mon,
+        return {"agent": want, "month": mon, "day": dd,
                 "settled": t.get("by_referrer", {}).get(want, {}),
                 "owed": t.get("owed", {}).get(want, {}),
                 "paid": t.get("paid", {}).get(want, {}),
                 "payable": t.get("payable", {}).get(want, {}),
                 "daily": t.get("by_referrer_daily", {}).get(want, []),
-                "payouts": self.list_payouts(limit, want, month, offset),
-                "totals": self.get_payout_totals(want, month)}
+                "payouts": self.list_payouts(limit, want, month, offset, day),
+                "totals": self.get_payout_totals(want, month, day)}
 
     def payouts_csv(self, limit=100, agent=None, month=None, offset=0, day=None, currency=None, ref=None, min_paid=None, max_paid=None):
         """Payout ledger as CSV, newest first (same rows as list_payouts).
@@ -1349,7 +1363,7 @@ class DB:
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
-    def statement_csv(self, agent, limit=100, month=None, offset=0):
+    def statement_csv(self, agent, limit=100, month=None, offset=0, day=None):
         """One bringer's payout rows as CSV, newest first.
 
         One header row plus one row per payment for the owner (localhost
@@ -1358,8 +1372,10 @@ class DB:
         one-screen statement reconciles in a spreadsheet without touching
         JSON. month is the same optional pay-month filter in YYYY-MM as
         get_statement() (None/blank/'all' = every month, malformed raises
-        ValueError for a 400). offset is the same optional row skip as
-        list_payouts (localhost GET /api/statement.csv?agent=X&offset=O
+        ValueError for a 400) and day the same optional exact-day filter
+        in YYYY-MM-DD (None/blank/'all' = every day, malformed raises
+        ValueError for a 400, combines with agent and month as AND).
+        offset is the same optional row skip as list_payouts (localhost GET /api/statement.csv?agent=X&offset=O
         answers 'the next page of this bringer's payments'); junk/negative
         reads as 0, beyond-the-book reads header only. None renders as an
         empty cell, values are csv-quoted as needed. Blank agents render
@@ -1377,7 +1393,7 @@ class DB:
         want = agent.strip() if isinstance(agent, str) else ""
         if not want:
             return buf.getvalue()
-        for row in self.list_payouts(limit, want, month, offset):
+        for row in self.list_payouts(limit, want, month, offset, day):
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
@@ -3200,12 +3216,13 @@ def make_handler(db):
                 if not want:
                     return self._json({"ok": False, "error": "agent required"}, 400)
                 month = q.get("month", [None])[0]
+                day = q.get("day", [None])[0]
                 try:
                     offset = max(0, int(q.get("offset", ["0"])[0]))
                 except ValueError:
                     offset = 0
                 try:
-                    st = db.get_statement(want, limit, month, offset)
+                    st = db.get_statement(want, limit, month, offset, day)
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 return self._json({"ok": True, **st})
@@ -3223,12 +3240,13 @@ def make_handler(db):
                 if not want:
                     return self._json({"ok": False, "error": "agent required"}, 400)
                 month = q.get("month", [None])[0]
+                day = q.get("day", [None])[0]
                 try:
                     offset = max(0, int(q.get("offset", ["0"])[0]))
                 except ValueError:
                     offset = 0
                 try:
-                    b = db.statement_csv(want, limit, month, offset).encode()
+                    b = db.statement_csv(want, limit, month, offset, day).encode()
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 self.send_response(200)
