@@ -1491,13 +1491,13 @@ class DB:
             return s
         return None
 
-    def get_month_close(self, month=None, agent=None):
+    def get_month_close(self, month=None, agent=None, currency=None):
         """One month's close per bringer, read-only.
 
-        {month, commission_pct, agent, rows:[{agent, currency, settled, owed,
-        paid, payable, settled_n, payouts_n}], totals:{settled, owed, paid,
-        payable, settled_n, payouts_n}} for the owner (localhost
-        GET /api/close?month=YYYY-MM&agent=X): the month-end reckoning in one
+        {month, commission_pct, agent, currency, rows:[{agent, currency, settled,
+        owed, paid, payable, settled_n, payouts_n}], totals:{settled, owed,
+        paid, payable, settled_n, payouts_n}} for the owner (localhost
+        GET /api/close?month=YYYY-MM&agent=X&currency=SOL): the month-end reckoning in one
         read. settled sums REDEEMED prepaid codes carrying a recorded sale
         whose redeemer carries a first-touch referrer stamp (the same
         commission base as get_sales_totals().by_referrer), cut to codes
@@ -1517,7 +1517,13 @@ class DB:
         current UTC month. agent is an optional exact-match bringer filter
         (None/blank = every bringer, unknown bringers report []); the
         response echoes it as agent (None when unfiltered, mirroring
-        /api/payouts). totals sums the filtered rows per currency
+        /api/payouts). currency is an optional exact-match rail filter
+        (None/blank/'all' = every rail, case-insensitive, stored upper,
+        same vocabulary as /api/payouts?currency= and /api/codes?currency=;
+        localhost GET /api/close?month=YYYY-MM&currency=SOL answers 'how did
+        this rail's month end' without grepping the ledgers); the response
+        echoes it as currency (None when unfiltered, mirroring agent).
+        agent and currency combine (AND). totals sums the filtered rows per currency
         (settled/owed/paid/payable maps, round-9; owed/payable stay empty
         without a commission rate) plus settled_n/payouts_n counts, so the
         month reads its headline without summing rows; unknown months
@@ -1526,8 +1532,11 @@ class DB:
         if m is None:
             raise ValueError("month must be YYYY-MM")
         want = agent.strip() if isinstance(agent, str) and agent.strip() else None
+        want_cur = currency.strip().upper() if isinstance(currency, str) else ""
+        if want_cur == "ALL":
+            want_cur = ""
         empty = {"month": m, "commission_pct": COMMISSION_PCT,
-                 "agent": want, "rows": [],
+                 "agent": want, "currency": want_cur or None, "rows": [],
                  "totals": {"settled": {}, "owed": {}, "paid": {},
                             "payable": {}, "settled_n": 0, "payouts_n": 0}}
         try:
@@ -1553,6 +1562,8 @@ class DB:
                 continue
             if not isinstance(redeemed_at, str) or redeemed_at[:7] != m:
                 continue
+            if want_cur and currency != want_cur:
+                continue
             agent = refmap.get(redeemed_by)
             if not agent:
                 continue
@@ -1565,6 +1576,8 @@ class DB:
             if not agent or not currency:
                 continue
             if not isinstance(day, str) or day[:7] != m:
+                continue
+            if want_cur and currency != want_cur:
                 continue
             key = (agent, currency)
             paid[key] = paid.get(key, 0) + float(amount)
@@ -1585,8 +1598,9 @@ class DB:
                           "paid": pd, "payable": payable,
                           "settled_n": settled_n.get(key, 0),
                           "payouts_n": paid_n.get(key, 0)})
-        rows = ([r for r in out if r["agent"] == want]
-                if want else out)
+        rows = [r for r in out
+                if (not want or r["agent"] == want)
+                and (not want_cur or r["currency"] == want_cur)]
         tot = {"settled": {}, "owed": {}, "paid": {}, "payable": {},
                "settled_n": 0, "payouts_n": 0}
         for r in rows:
@@ -1607,12 +1621,13 @@ class DB:
         empty["totals"] = tot
         return empty
 
-    def close_csv(self, month=None, agent=None):
+    def close_csv(self, month=None, agent=None, currency=None):
         """One month's close as CSV, one row per bringer and currency.
 
         One header row plus one row per (agent, currency) for the owner
-        (localhost GET /api/close.csv?month=YYYY-MM&agent=X, agent optional
-        exact-match filter, blank means every bringer):
+        (localhost GET /api/close.csv?month=YYYY-MM&agent=X&currency=SOL,
+        agent optional exact-match filter, blank means every bringer,
+        currency optional exact-match rail filter, blank means every rail):
         month,agent,currency,settled,owed,paid,payable,settled_n,payouts_n,
         commission_pct — the same rows get_month_close() reports, so the
         month-end reckoning reconciles in a spreadsheet without touching
@@ -1630,7 +1645,7 @@ class DB:
         buf = io.StringIO(newline="")
         w = csv.writer(buf)
         w.writerow(cols)
-        close = self.get_month_close(month, agent)
+        close = self.get_month_close(month, agent, currency)
         for row in close["rows"]:
             w.writerow([close["month"], row["agent"], row["currency"],
                           row["settled"],
@@ -3330,7 +3345,8 @@ def make_handler(db):
                 month = q.get("month", [None])[0]
                 agent = q.get("agent", [None])[0]
                 try:
-                    close = db.get_month_close(month, agent)
+                    close = db.get_month_close(month, agent,
+                                               q.get("currency", [None])[0])
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 return self._json({"ok": True, **close})
@@ -3342,7 +3358,8 @@ def make_handler(db):
                 month = q.get("month", [None])[0]
                 agent = q.get("agent", [None])[0]
                 try:
-                    b = db.close_csv(month, agent).encode()
+                    b = db.close_csv(month, agent,
+                                     q.get("currency", [None])[0]).encode()
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 self.send_response(200)
