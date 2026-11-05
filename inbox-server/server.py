@@ -2774,7 +2774,7 @@ class DB:
         return {"grants": row[0] if row else 0, "credits": row[1] if row else 0}
 
     def get_reckoning(self, needs_topup_only=False, min_spent=None,
-                      max_spent=None):
+                      max_spent=None, offset=0):
         """Whole cash register in one read, newest shape additive only.
 
         {sales, payouts, grants, quota}: the three whole-book totals side by side
@@ -2816,7 +2816,12 @@ class DB:
         50' when the owner caps the top-up table from above; same rules
         as the floor, never an error, not echoed either). The three
         windows combine
-        (AND): the bill-first queue inside one money band. needs_topup_n
+        (AND): the bill-first queue inside one money band. offset is an
+        optional row skip paging the served top-up table (localhost GET
+        /api/reckoning?offset=100 answers 'the next page of buyers' once
+        the table pushes past the 100-row cap; junk/negative/bool reads
+        as 0, beyond-the-table reads [], never an error, not echoed, so
+        no param keeps the previous rows byte-identical). needs_topup_n
         counts the served window in every case.
         Read-only, never an error, empty
         book reads zeros.
@@ -2863,7 +2868,14 @@ class DB:
                         if isinstance(e, dict)
                         and isinstance(e.get("spent"), (int, float))
                         and e.get("spent") <= want_max]
-        quota["by_buyer"] = by_buyer
+        if isinstance(offset, bool):
+            off = 0
+        else:
+            try:
+                off = max(0, int(offset))
+            except (TypeError, ValueError):
+                off = 0
+        quota["by_buyer"] = by_buyer[off:]
         try:
             quota["needs_topup_n"] = sum(
                 1 for e in quota.get("by_buyer") or []
@@ -2873,7 +2885,7 @@ class DB:
         return {"sales": sales, "payouts": payouts, "grants": grants, "quota": quota}
 
     def reckoning_csv(self, needs_topup_only=False, min_spent=None,
-                      max_spent=None):
+                      max_spent=None, offset=0):
         """Whole cash register as CSV, one summary row per figure.
 
         One header row plus one row per figure for the owner (localhost
@@ -2909,6 +2921,10 @@ class DB:
         reads as off, same vocabulary as /api/codes?max_sale=; with
         min_spent it frames the money-side value band, so the three
         windows combine)
+        and offset=N serves only the served buyers from row N on
+        (localhost GET /api/reckoning.csv?offset=100; junk reads as 0,
+        same vocabulary as /api/close.csv?offset=; the four windows
+        combine)
         while every aggregate row — sales,
         commission, payouts, grants, would_block totals and
         needs_topup_buyers (which then counts the served
@@ -2920,7 +2936,7 @@ class DB:
         w = csv.writer(buf)
         w.writerow(cols)
         try:
-            r = self.get_reckoning(needs_topup_only, min_spent, max_spent)
+            r = self.get_reckoning(needs_topup_only, min_spent, max_spent, offset)
         except sqlite3.Error:
             r = {"sales": {}, "payouts": {}, "grants": {}, "quota": {}}
         sales = r.get("sales") or {}
@@ -3580,7 +3596,8 @@ def make_handler(db):
                 flag = (q.get("needs_topup", [""])[0] or "").strip().lower() in ("1", "true", "yes")
                 floor = parse_min_spent((q.get("min_spent", [""])[0] or "").strip() or None)
                 ceil = parse_max_spent((q.get("max_spent", [""])[0] or "").strip() or None)
-                return self._json({"ok": True, **db.get_reckoning(flag, floor, ceil)})
+                offset = q.get("offset", [None])[0]
+                return self._json({"ok": True, **db.get_reckoning(flag, floor, ceil, offset)})
             if u.path == "/api/reckoning.csv":
                 peer = (self.client_address[0] if self.client_address else "")
                 if peer not in ("127.0.0.1", "::1"):
@@ -3589,7 +3606,8 @@ def make_handler(db):
                 flag = (q.get("needs_topup", [""])[0] or "").strip().lower() in ("1", "true", "yes")
                 floor = parse_min_spent((q.get("min_spent", [""])[0] or "").strip() or None)
                 ceil = parse_max_spent((q.get("max_spent", [""])[0] or "").strip() or None)
-                b = db.reckoning_csv(flag, floor, ceil).encode()
+                offset = q.get("offset", [None])[0]
+                b = db.reckoning_csv(flag, floor, ceil, offset).encode()
                 self.send_response(200)
                 self.send_header("content-type", "text/csv; charset=utf-8")
                 self.send_header("content-length", str(len(b)))
