@@ -1255,10 +1255,10 @@ class DB:
                 "paid": {r[0]: round(r[1], 9) for r in rows}}
 
     def get_statement(self, agent, limit=100, month=None, offset=0, day=None,
-                        currency=None, ref=None, min_paid=None):
+                        currency=None, ref=None, min_paid=None, max_paid=None):
         """Per-bringer payout statement in one read, newest payouts first.
 
-        {agent, month, day, currency, ref, min_paid, settled, owed, paid,
+        {agent, month, day, currency, ref, min_paid, max_paid, settled, owed, paid,
         payable, daily, payouts, totals}
         for the owner (localhost GET /api/statement?agent=X): the payout
         moment on one screen — what this bringer's clients settled, what
@@ -1305,21 +1305,28 @@ class DB:
         /api/statement?agent=X&limit=L&offset=O answers 'the next page of
         this bringer's payments' past the 500-row cap); junk/negative
         reads as 0, beyond-the-book reads [], totals ignore it (the
-        bringer's whole payment ledger, never the window). month and day
+        bringer's whole payment ledger, never the window). max_paid is an
+        optional value ceiling on the recorded amount (localhost GET
+        /api/statement?agent=X&max_paid=500 answers 'which of this
+        bringer's small payments moved at most 500', same vocabulary as
+        /api/payouts?max_paid= and /api/codes?max_sale=; with ?min_paid it
+        frames the money-side value band); None/blank/junk/zero/negative
+        means every payout, never an error, combines with agent, month,
+        day, currency, ref and min_paid as AND. month and day
         scope the payment rows and their totals only; settled, owed,
         paid, payable and daily stay lifetime
         (the settled reckoning for one month is the per-month /api/close).
         Slices of get_sales_totals() plus list_payouts(limit, agent, month,
-        offset, day, currency, ref, min_paid) plus get_payout_totals(agent,
-        month, day, currency, ref, min_paid); no new
+        offset, day, currency, ref, min_paid, max_paid) plus get_payout_totals(agent,
+        month, day, currency, ref, min_paid, max_paid); no new
         table, never an error except the malformed month or day, unknown
         agents report empty maps, [] and zero totals. Blank agents report
         agent None with everything empty and zero totals (the HTTP layer
         refuses them with 400: a statement is per-bringer, the full ledger
-        already answers everyone). No month, no day, no currency, no ref
-        and no min_paid keep the
+        already answers everyone). No month, no day, no currency, no ref,
+        no min_paid and no max_paid keep the
         previous rows byte-identical (only the additive month: None,
-        day: None, currency: None, ref: None and min_paid: None echoes are
+        day: None, currency: None, ref: None, min_paid: None and max_paid: None echoes are
         new); no offset keeps them byte-identical too (offset
         only windows the row list, it is not echoed)."""
         want = agent.strip() if isinstance(agent, str) else ""
@@ -1342,10 +1349,11 @@ class DB:
             want_cur = None
         want_ref = parse_payout_ref(ref)
         want_min = parse_min_paid(min_paid)
+        want_max = parse_max_paid(max_paid)
         if not want:
             return {"agent": None, "month": mon, "day": dd,
                     "currency": want_cur, "ref": want_ref,
-                    "min_paid": want_min, "settled": {},
+                    "min_paid": want_min, "max_paid": want_max, "settled": {},
                     "owed": {}, "paid": {}, "payable": {}, "daily": [],
                     "payouts": [],
                     "totals": {"payouts": 0, "paid": {}}}
@@ -1356,16 +1364,16 @@ class DB:
                  "payable": {}, "by_referrer_daily": {}}
         return {"agent": want, "month": mon, "day": dd,
                 "currency": want_cur, "ref": want_ref,
-                "min_paid": want_min,
+                "min_paid": want_min, "max_paid": want_max,
                 "settled": t.get("by_referrer", {}).get(want, {}),
                 "owed": t.get("owed", {}).get(want, {}),
                 "paid": t.get("paid", {}).get(want, {}),
                 "payable": t.get("payable", {}).get(want, {}),
                 "daily": t.get("by_referrer_daily", {}).get(want, []),
                 "payouts": self.list_payouts(limit, want, month, offset, day,
-                                           currency, ref, min_paid),
+                                           currency, ref, min_paid, max_paid),
                 "totals": self.get_payout_totals(want, month, day, currency,
-                                                 ref, min_paid)}
+                                                 ref, min_paid, max_paid)}
 
     def payouts_csv(self, limit=100, agent=None, month=None, offset=0, day=None, currency=None, ref=None, min_paid=None, max_paid=None):
         """Payout ledger as CSV, newest first (same rows as list_payouts).
@@ -1401,7 +1409,7 @@ class DB:
         return buf.getvalue()
 
     def statement_csv(self, agent, limit=100, month=None, offset=0, day=None,
-                          currency=None, ref=None, min_paid=None):
+                          currency=None, ref=None, min_paid=None, max_paid=None):
         """One bringer's payout rows as CSV, newest first.
 
         One header row plus one row per payment for the owner (localhost
@@ -1422,6 +1430,9 @@ class DB:
         (None/blank = every payout, case-insensitive, combines as AND).
         min_paid is the same optional value floor as get_statement()
         (None/blank/junk/zero/negative = every payout, combines as AND).
+        max_paid is the same optional value ceiling as get_statement()
+        (None/blank/junk/zero/negative = every payout, combines as AND;
+        with min_paid it frames the money-side value band).
         offset is the same optional row skip as list_payouts (localhost GET /api/statement.csv?agent=X&offset=O
         answers 'the next page of this bringer's payments'); junk/negative
         reads as 0, beyond-the-book reads header only. None renders as an
@@ -1441,7 +1452,7 @@ class DB:
         if not want:
             return buf.getvalue()
         for row in self.list_payouts(limit, want, month, offset, day,
-                                       currency, ref, min_paid):
+                                       currency, ref, min_paid, max_paid):
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
@@ -3274,7 +3285,7 @@ def make_handler(db):
                     offset = 0
                 try:
                     st = db.get_statement(want, limit, month, offset, day,
-                                          currency, ref, min_paid)
+                                          currency, ref, min_paid, q.get("max_paid", [None])[0])
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 return self._json({"ok": True, **st})
@@ -3302,7 +3313,7 @@ def make_handler(db):
                     offset = 0
                 try:
                     b = db.statement_csv(want, limit, month, offset, day,
-                                         currency, ref, min_paid).encode()
+                                         currency, ref, min_paid, q.get("max_paid", [None])[0]).encode()
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 self.send_response(200)
