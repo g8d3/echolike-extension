@@ -3,6 +3,14 @@ const t = (k, s) => { try { const m = ext && ext.i18n && ext.i18n.getMessage(k, 
 const $ = (i) => document.getElementById(i);
 const send = (m) => new Promise((ok) => ext.runtime.sendMessage(m, (r) => ok(ext.runtime.lastError ? { ok: false, error: ext.runtime.lastError.message } : r)));
 const hora = (s) => s ? new Date(s).toLocaleTimeString() : "";
+function diagResumen(it) {
+  const z = it.traza || {};
+  if (z.error) return "diag failed: " + String(z.error).slice(0, 60);
+  const que = z.es_articulo ? ("article " + z.es_articulo) : z.es_tweet ? ("tweet " + z.es_tweet) : (it.url || "");
+  const pg = z.pagina && z.pagina.article_chars ? (" · page " + z.pagina.article_chars + " chars")
+    : z.pagina && z.pagina.error ? " · page: " + String(z.pagina.error).slice(0, 40) : "";
+  return ("diag " + que + pg).slice(0, 120);
+}
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 function stateLabel(estado) {
   if (estado === "recibido") return t("stateReceived");
@@ -46,6 +54,23 @@ function applyI18n() {
   } catch (e) {}
 }
 applyI18n();
+// Puerto (costura): la tabla «Latest captured» de la calle, con el resumen de un diagnóstico.
+function pintarItems(datos, eventos) {
+  const tb = $("items");
+  if (!tb) return;
+  const evByUid = {};
+  for (const e of eventos || []) if (e && e.uid) evByUid[e.uid] = e;
+  const rows = (datos || []).slice(-30).reverse().map((it) => {
+    const e = evByUid[it.uid];
+    const estado = !e ? "saved here" : e.estado === "recibido" ? "in inbox" : e.estado;
+    const cls = estado === "in inbox" ? "rec" : estado === "error" ? "err" : "ok";
+    const txt = it.kind === "diagnostico" ? diagResumen(it) : (it.text || it.nota || "");
+    return `<tr><td class=tm title="${esc(it.clicked_at || it.saved_at || "")}">${hora(it.clicked_at || it.saved_at)}</td>` +
+      `<td class=kd>${esc(it.kind)}</td><td class=hd>${it.handle ? "@" + esc(it.handle) : "—"}</td>` +
+      `<td title="${esc(txt)}">${esc(txt)}</td><td class="st ${cls}">${esc(estado)}</td></tr>`;
+  }).join("");
+  tb.innerHTML = rows || `<tr><td><small>Nothing captured yet — like or bookmark a post on X.</small></td></tr>`;
+}
 async function pintar() {
   const c = await ext.storage.local.get({ codigo: "", mic: true, eventos: [], ultimo: null, cola: [], ultimo_ack: null, hoy: null, transport: "direct", inbox_url: "", device_token: "" });
   const mode = c.transport || "direct";
@@ -87,6 +112,7 @@ async function pintar() {
   $("estado").innerHTML += (c.cola.length && sync ? `<br><span class=err>${esc(t("pendingRetry", [String(c.cola.length)]))}</span>` : "") +
     (sync ? `<br><small>${esc(t("lastConfirm", [c.ultimo_ack && nrec > 0 ? hora(c.ultimo_ack) : t("never")]))}</small>` : "");
   $("hoy").textContent = t("todayCounter", [String(h.likes), String(h.bookmarks)]);
+  pintarItems(datos, c.eventos);
   $("ev").innerHTML = c.eventos.map((e) => `<tr><td>${hora(e.at)}</td><td>${esc(e.kind)}</td><td>${e.handle ? "@" + esc(e.handle) : ""}</td>` +
     `<td class=${e.estado === "error" ? "err" : e.estado === "recibido" ? "rec" : "ok"}>${esc(stateLabel(e.estado))}${e.error ? "<br>" + esc(e.error) : ""}</td></tr>`).join("");
 }

@@ -1,6 +1,8 @@
 <!doctype html><meta charset="utf-8"><title>EchoLike</title>
 <style>body{font:13px system-ui;width:360px;margin:12px}button{font:inherit;padding:6px;box-sizing:border-box;margin:3px 0}button{width:49%}
 #estado{margin:6px 0;padding:8px;border-radius:8px;background:#f2f2f2}.ok{color:#00875a}.err{color:#d0021b}.rec{color:#1d9bf0;font-weight:600}.warn{color:#b26a00}
+#twrap{max-height:240px;overflow:auto;border:1px solid #eee;border-radius:6px}td.tm{width:52px}td.kd{width:64px}td.hd{width:76px}td.st{width:58px}
+#twrap td{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row{display:flex;gap:6px;margin:6px 0}.row input{flex:1;font:inherit;padding:6px;border:1px solid #ccc;border-radius:6px}
 #diag{margin:6px 0;padding:8px;border-radius:8px;background:#eef4ff;display:none;white-space:pre-wrap;font-size:12px}
 table{width:100%;border-collapse:collapse;font-size:12px}td{border-top:1px solid #eee;padding:3px 2px;vertical-align:top}small{color:#666}
@@ -10,6 +12,8 @@ details{margin-top:8px;border-top:1px solid #eee;padding-top:6px}summary{cursor:
 <div id="privacidad" style="margin:0 0 6px;padding:8px;border-radius:8px;background:#eefaf3"><span data-i18n="privacyShort">Your likes and notes are saved in this browser only. Nothing is sent anywhere unless you turn on sync.</span> <small id="nlocal"></small></div>
 <label><input id="sync" type="checkbox"> <span data-i18n="syncLabel">Sync to my EchoLike inbox (encrypted, off by default)</span></label><br>
 <div id="estado">—</div>
+<b>Latest captured</b> <small>(this browser)</small>
+<div id="twrap"><table id="items"></table></div>
 <div id="parbox" style="display:none;margin:6px 0;padding:8px;border-radius:8px;background:#eef4ff"><b data-i18n="parCodeTitle">Your extension code — click to copy</b><br><button id="codigo" type="button" data-i18n="copyCode" style="margin:4px 0;padding:6px 12px;cursor:pointer">Copy code</button> <small id="codigoCorto" style="color:#666"></small> <span id="copiado"></span><br><small data-i18n="parHint">Send /par followed by this code to the bot.</small></div>
 <div id="directbox" style="display:none;margin:6px 0;padding:8px;border-radius:8px;background:#eefaf3"><b data-i18n="directTitle">Direct inbox</b><br><small id="directInfo"></small> <a href="options.html" id="inboxLink" data-i18n="openInboxSettings">Inbox settings</a><br><small data-i18n="pairHint">Pair once with the bot below to get your device token — that is what lets your likes reach your inbox.</small></div>
 <a class="btn connectLink" href="https://t.me/nova_radar_99_bot" target="_blank" id="conectar" data-i18n="connectBrowser">Connect this browser</a>
