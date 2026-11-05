@@ -97,5 +97,19 @@ $("probar").onclick = async () => {
   $("estado").textContent = t("sendingTest"); const r = await send({ tipo: "prueba" }); await pintar();
   if (r && r.ok) setTimeout(async () => { await send({ tipo: "acuses" }); pintar(); }, 8000);
 };
+async function probar() {
+  const url = ($("url") && $("url").value || "").trim();
+  const box = $("diag");
+  if (!url) { if (box) { box.style.display = ""; box.textContent = "Paste a URL first."; } return; }
+  if (box) { box.style.display = ""; box.textContent = "Testing…"; }
+  const r = await send({ tipo: "diagnostico", url });
+  if (box) {
+    if (r && r.ok) box.textContent = "Sent as diagnostic " + (r.uid || "") + " — trace:\n" + JSON.stringify(r.trace, null, 1).slice(0, 2000);
+    else box.textContent = "Test failed: " + ((r && r.error) || "no answer from background");
+  }
+  pintar();
+}
+if ($("probar")) $("probar").onclick = probar;
+if ($("url")) $("url").addEventListener("keydown", (e) => { if (e.key === "Enter") probar(); });
 ext.storage.onChanged.addListener(() => pintar());
 pintar(); send({ tipo: "acuses" }).then(pintar);

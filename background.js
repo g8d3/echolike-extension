@@ -323,6 +323,45 @@ async function enviar(item) {
   await anotar(item, "en cola"); await encolar(item);
   const r = await vaciar(); return Object.assign({ uid: item.uid }, r);
 }
+// ---- Diagnostics (v2.11): the popup hands a URL, the worker runs the same
+// capture path the like flow uses and reports every step. The trace ships as a
+// kind:diagnostico item through the normal pipeline, so extension, inbox and
+// backend all keep the same record; the backend drops a review file for the agent.
+const DIAG_MS = 8000;
+const espera = (ms) => new Promise((_, no) => setTimeout(() => no(new Error("timeout")), ms));
+async function diagnosticar(url) {
+  const trace = { at: new Date().toISOString(), version: ext.runtime.getManifest().version, url: String(url || "").slice(0, 500) };
+  try {
+    const u = trace.url;
+    trace.es_tco = /https?:\/\/t\.co\//.test(u);
+    let fin = u;
+    if (trace.es_tco) {
+      try {
+        const r = await Promise.race([fetch(u, { redirect: "manual" }), espera(DIAG_MS)]);
+        fin = (r.headers && r.headers.get && r.headers.get("location")) || u;
+        trace.resuelto = String(fin).slice(0, 500);
+      } catch (e) { trace.error_resolver = String((e && e.message) || e).slice(0, 120); }
+    }
+    let m = String(fin).match(/\/i\/article\/(\d+)/);
+    trace.es_articulo = (m && m[1]) || null;
+    if (!trace.es_articulo) { m = String(fin).match(/\/status\/(\d+)/); trace.es_tweet = (m && m[1]) || null; }
+    trace.sync = await syncOn();
+    trace.transport = await transporte();
+    trace.pagina = null;
+    try {
+      const tabs = await ext.tabs.query({ active: true, currentWindow: true });
+      const tab = tabs && tabs[0];
+      trace.tab = tab && tab.url ? String(tab.url).slice(0, 200) : null;
+      if (tab && tab.id != null && /^https:\/\/(x\.com|twitter\.com|mobile\.(x|twitter)\.com)\//.test(trace.tab || "")) {
+        trace.pagina = await Promise.race([ext.tabs.sendMessage(tab.id, { tipo: "diagnosticar" }), espera(DIAG_MS)]);
+      }
+    } catch (e) { trace.pagina = { error: String((e && e.message) || e).slice(0, 160) }; }
+  } catch (e) { trace.error = String((e && e.message) || e).slice(0, 160); }
+  const item = { v: 2, kind: "diagnostico", clicked_at: trace.at, url: trace.url,
+    id: "diag-" + Date.now().toString(36), traza: trace, text: JSON.stringify(trace).slice(0, 5000) };
+  const r = await enviar(item);
+  return Object.assign({ uid: item.uid, trace }, r);
+}
 async function acuses() {
   if (!(await syncOn())) return { ok: true, uids: [], nuevos: 0, local: true };
   if ((await transporte()) === "direct") return { ok: true, uids: [], nuevos: 0, direct: true }; // confirmations already inline
@@ -341,6 +380,7 @@ async function acuses() {
 }
 ext.runtime.onMessage.addListener((m, _s, responder) => {
   const p = m && m.tipo === "item" ? enviar(m.item)
+    : m && m.tipo === "diagnostico" ? diagnosticar(m.url)
     : m && m.tipo === "prueba" ? enviar({ v: 2, kind: "ping", prueba: true, clicked_at: new Date().toISOString() })
     : m && m.tipo === "acuses" ? acuses()
     : m && m.tipo === "validar" ? Promise.resolve(parseCodigo(m.codigo))

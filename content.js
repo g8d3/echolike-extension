@@ -74,7 +74,17 @@
         const href = a.getAttribute("href") || "";
         if (!href || links.some((l) => l.href === href)) continue;
         links.push({ href, title: (a.getAttribute("title") || "").slice(0, 500),
-          texto: (a.innerText || a.textContent || "").slice(0, 200) });
+          text: (a.innerText || a.textContent || "").slice(0, 200) });
+      }
+      // Article cards link straight at /i/article/ (no t.co hop): record them resolved.
+      for (const a of art.querySelectorAll('a[href*="/i/article/"]')) {
+        if (links.length >= 10) break;
+        const href = a.getAttribute("href") || "";
+        const m = href.match(/\/i\/article\/(\d+)/);
+        if (!m || links.some((l) => l.href === href)) continue;
+        links.push({ href, resuelto: "https://x.com/i/article/" + m[1],
+          title: (a.getAttribute("title") || "").slice(0, 500),
+          text: (a.innerText || a.textContent || "").slice(0, 200) });
       }
     } catch (e) {}
     return links;
@@ -206,7 +216,7 @@
       }, FOLLOWUP_MS);
     } catch (e) {}
   }
-  const api = { botonAccion, extraer, evento, ACCIONES, esEditable, teclaAbreNota, teclaEsLike, teclaEsBookmark, itemNota, accionTecla, HOLD_MS, N_MS, parseCount, metricas, outgoingLinks, mediaInfo, isTruncated, expandPost, sendWithFollowup, FOLLOWUP_MS, articlePage, articleText, detailId };
+  const api = { botonAccion, extraer, evento, ACCIONES, esEditable, teclaAbreNota, teclaEsLike, teclaEsBookmark, itemNota, accionTecla, HOLD_MS, N_MS, parseCount, metricas, outgoingLinks, mediaInfo, isTruncated, expandPost, sendWithFollowup, FOLLOWUP_MS, articlePage, articleText, detailId, articleCards };
   if (typeof module !== "undefined") module.exports = api;
   root.EchoLike = api;
 
@@ -237,15 +247,35 @@
     return { title, body };
   }
   function detailId(path) { const m = String(path || "").match(/^\/([A-Za-z0-9_]{1,15})\/status\/(\d+)(?:[/?#]|$)/); return m ? { handle: m[1], id: m[2] } : null; }
+  // Cards visible on the page (article previews, quote cards): what the reader
+  // actually saw, including when the article route itself redirects away.
+  function articleCards(doc) {
+    const out = [];
+    try {
+      for (const a of doc.querySelectorAll('a[href*="/i/article/"]')) {
+        if (out.length >= 5) break;
+        const m = (a.getAttribute("href") || "").match(/\/i\/article\/(\d+)/);
+        if (!m || out.some((o) => o.id === m[1])) continue;
+        const box = a.closest('[data-testid="card.wrapper"]') || a.parentElement;
+        const card = box ? (box.innerText || box.textContent || "") : "";
+        out.push({ id: m[1], card: card.replace(/\s+/g, " ").trim().slice(0, 1000) });
+      }
+    } catch (e) {}
+    return out;
+  }
   let enrichDone = null;
   function enrichDetail() {
     try {
       const d = detailId(root.location.pathname);
       if (!d || enrichDone === d.id) return;
-      ext.storage.local.get({ truncated_recent: [] }, (s) => {
+      ext.storage.local.get({ truncated_recent: [], datos: [] }, (s) => {
         try {
           const ent = (s.truncated_recent || []).find((x) => x && String(x.id) === d.id);
-          if (!ent) return;
+          const known = ent ? ent.chars : (() => {
+            const it = (s.datos || []).find((x) => x && String(x.id) === d.id && (x.kind === "like" || x.kind === "bookmark"));
+            return it ? { chars: (it.text || "").length } : null;
+          })();
+          if (!known) return;   // never liked here: looking is not capturing
           let art = null;
           for (const a of root.document.querySelectorAll("article")) {
             try { if (a.querySelector(`a[href$="/status/${d.id}"] time`)) { art = a; break; } } catch (e) {}
@@ -253,7 +283,7 @@
           const like = art && art.querySelector('[data-testid="like"],[data-testid="unlike"]');
           const d2 = like && extraer(like, root.location.pathname);
           if (!d2 || d2.id !== d.id) return;
-          if ((d2.text || "").length > (ent.chars || 0) + 20) {
+          if ((d2.text || "").length > (known.chars || 0) + 20) {
             enrichDone = d.id;
             mandar({ v: 2, kind: "followup", clicked_at: new Date().toISOString(),
               id: d2.id, handle: d2.handle, url: d2.url, text: d2.text,
@@ -295,6 +325,24 @@
       setTimeout(enrichDetail, 3000);   // React paints late; one retry, send-once guarded
     } catch (e) {}
   }
+  // Diagnostics: the popup asks what this page would contribute to a like.
+  // Pure read-only answer, never sends anything by itself.
+  try {
+    ext.runtime.onMessage.addListener((m, _s, responder) => {
+      if (!m || m.tipo !== "diagnosticar") return;
+      try {
+        const aid = articlePage(root.location.pathname);
+        const d = detailId(root.location.pathname);
+        const a = aid ? articleText(root.document) : null;
+        let tcos = 0;
+        try { tcos = root.document.querySelectorAll('a[href*="t.co"]').length; } catch (e) {}
+        responder({ ok: true, aid, detail: d, article_chars: a ? a.body.length : 0,
+          article_title: a ? a.title.slice(0, 120) : null, tco_links: tcos,
+          cards: articleCards(root.document),
+          url: String(root.location.href).slice(0, 200) });
+      } catch (e) { responder({ ok: false, error: String(e).slice(0, 120) }); }
+    });
+  } catch (e) {}
   function mandar(item) {
     const t0 = performance.now();
     try {
@@ -480,5 +528,20 @@
     const f = () => { if (c.mic) ponerMics(); if (c.notas) ponerPlumas(); };
     f(); new MutationObserver(f).observe(root.document.body, { childList: true, subtree: true });
   });
+  // X is an SPA: route changes (tweet -> article reader and back) never reload the
+  // page, so re-run enrichment whenever the URL moves. Debounced, send-once guarded.
+  let lastHref = String(root.location.href);
+  let navTimer = null;
+  try {
+    new MutationObserver(() => {
+      try {
+        const h = String(root.location.href);
+        if (h === lastHref) return;
+        lastHref = h;
+        clearTimeout(navTimer);
+        navTimer = setTimeout(() => { try { enrichPage(); } catch (e) {} }, 1200);
+      } catch (e) {}
+    }).observe(root.document.documentElement || root.document.body, { childList: true, subtree: true });
+  } catch (e) {}
   try { enrichPage(); } catch (e) {}
 })(typeof window !== "undefined" ? window : globalThis);
