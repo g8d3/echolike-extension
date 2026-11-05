@@ -366,6 +366,28 @@ def parse_min_settled(v):
     return n if n > 0 else None
 
 
+def parse_max_settled(v):
+    """Maximum-settled filter for the month-end close: float or None.
+
+    A positive number keeps only close rows whose settled revenue is at
+    most that much (localhost GET /api/close?max_settled=100 answers
+    'which bringers settled at most 100 this month' when the owner caps
+    a payout band, and together with ?min_settled=N it frames the
+    money-side value band on the close book, same vocabulary as
+    /api/codes?max_sale= and /api/payouts?max_paid=); None = every row.
+    Accepts real ints/floats for direct DB calls; blank/junk/zero/negative
+    reads as None (every row), never an error."""
+    if isinstance(v, bool):
+        return None
+    if v is None:
+        return None
+    try:
+        n = float(v.strip() if isinstance(v, str) else v)
+    except (TypeError, ValueError, AttributeError):
+        return None
+    return n if n > 0 else None
+
+
 def is_private(ip):
     """LAN, Tailscale and loopback: places where getting in already means trust."""
     try:
@@ -1514,7 +1536,7 @@ class DB:
         return None
 
     def get_month_close(self, month=None, agent=None, currency=None, day=None,
-                        min_settled=None):
+                        min_settled=None, max_settled=None):
         """One month's close per bringer, read-only.
 
         {month, commission_pct, agent, currency, day, rows:[{agent, currency, settled,
@@ -1560,9 +1582,18 @@ class DB:
         'which bringers settled at least 100' without scrolling every small
         row, same vocabulary as /api/codes?min_sale= and
         /api/payouts?min_paid=); None/blank/junk/zero/negative means every
-        row, never an error, and it combines with month, agent, currency
-        and day as AND. The response echoes it as min_settled (None when
-        unfiltered, mirroring agent, currency and day). totals sums the filtered rows per currency
+        row, never an error, and it combines with month, agent, currency,
+        day and max_settled as AND. The response echoes it as min_settled (None when
+        unfiltered, mirroring agent, currency and day). max_settled is an
+        optional settled-value ceiling (localhost GET
+        /api/close?month=YYYY-MM&max_settled=100 answers 'which bringers
+        settled at most 100' without scrolling every whale row, same
+        vocabulary as /api/codes?max_sale= and /api/payouts?max_paid=, and
+        together with ?min_settled=N it frames the money-side value band on
+        the close book); None/blank/junk/zero/negative means every row,
+        never an error, and it combines with month, agent, currency, day
+        and min_settled as AND. The response echoes it as max_settled (None
+        when unfiltered, mirroring min_settled). totals sums the filtered rows per currency
         (settled/owed/paid/payable maps, round-9; owed/payable stay empty
         without a commission rate) plus settled_n/payouts_n counts, so the
         month reads its headline without summing rows; unknown months
@@ -1575,6 +1606,7 @@ class DB:
         if want_cur == "ALL":
             want_cur = ""
         want_min = parse_min_settled(min_settled)
+        want_max = parse_max_settled(max_settled)
         dd = None
         if isinstance(day, str) and day.strip().lower() == "all":
             day = None
@@ -1584,7 +1616,7 @@ class DB:
                 raise ValueError("day must be YYYY-MM-DD")
         empty = {"month": m, "commission_pct": COMMISSION_PCT,
                  "agent": want, "currency": want_cur or None, "day": dd,
-                 "min_settled": want_min, "rows": [],
+                 "min_settled": want_min, "max_settled": want_max, "rows": [],
                  "totals": {"settled": {}, "owed": {}, "paid": {},
                             "payable": {}, "settled_n": 0, "payouts_n": 0}}
         try:
@@ -1653,7 +1685,8 @@ class DB:
         rows = [r for r in out
                 if (not want or r["agent"] == want)
                 and (not want_cur or r["currency"] == want_cur)
-                and (want_min is None or r["settled"] >= want_min)]
+                and (want_min is None or r["settled"] >= want_min)
+                and (want_max is None or r["settled"] <= want_max)]
         tot = {"settled": {}, "owed": {}, "paid": {}, "payable": {},
                "settled_n": 0, "payouts_n": 0}
         for r in rows:
@@ -1675,7 +1708,7 @@ class DB:
         return empty
 
     def close_csv(self, month=None, agent=None, currency=None, day=None,
-                  min_settled=None):
+                  min_settled=None, max_settled=None):
         """One month's close as CSV, one row per bringer and currency.
 
         One header row plus one row per (agent, currency) for the owner
@@ -1683,7 +1716,8 @@ class DB:
         agent optional exact-match filter, blank means every bringer,
         currency optional exact-match rail filter, blank means every rail,
         day optional exact-day filter, blank/'all' means every day,
-        min_settled optional settled-value floor, blank/junk means every row):
+        min_settled optional settled-value floor, max_settled optional
+        settled-value ceiling, blank/junk means every row):
         month,agent,currency,settled,owed,paid,payable,settled_n,payouts_n,
         commission_pct — the same rows get_month_close() reports, so the
         month-end reckoning reconciles in a spreadsheet without touching
@@ -1701,7 +1735,8 @@ class DB:
         buf = io.StringIO(newline="")
         w = csv.writer(buf)
         w.writerow(cols)
-        close = self.get_month_close(month, agent, currency, day, min_settled)
+        close = self.get_month_close(month, agent, currency, day, min_settled,
+                                     max_settled)
         for row in close["rows"]:
             w.writerow([close["month"], row["agent"], row["currency"],
                           row["settled"],
@@ -3404,7 +3439,8 @@ def make_handler(db):
                     close = db.get_month_close(month, agent,
                                                q.get("currency", [None])[0],
                                                q.get("day", [None])[0],
-                                               q.get("min_settled", [None])[0])
+                                               q.get("min_settled", [None])[0],
+                                               q.get("max_settled", [None])[0])
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 return self._json({"ok": True, **close})
@@ -3419,7 +3455,8 @@ def make_handler(db):
                     b = db.close_csv(month, agent,
                                      q.get("currency", [None])[0],
                                      q.get("day", [None])[0],
-                                     q.get("min_settled", [None])[0]).encode()
+                                     q.get("min_settled", [None])[0],
+                                     q.get("max_settled", [None])[0]).encode()
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 self.send_response(200)
