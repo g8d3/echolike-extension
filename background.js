@@ -381,6 +381,8 @@ async function acuses() {
 ext.runtime.onMessage.addListener((m, _s, responder) => {
   const p = m && m.tipo === "item" ? enviar(m.item)
     : m && m.tipo === "diagnostico" ? diagnosticar(m.url)
+: m && m.tipo === "selftest" ? autoPrueba("manual")
+: m && m.tipo === "auditar" ? auditar(m.accion, m.detalle, "user").then(() => ({ ok: true }))
     : m && m.tipo === "prueba" ? enviar({ v: 2, kind: "ping", prueba: true, clicked_at: new Date().toISOString() })
     : m && m.tipo === "acuses" ? acuses()
     : m && m.tipo === "validar" ? Promise.resolve(parseCodigo(m.codigo))
@@ -442,4 +444,121 @@ if (ext.runtime.onMessageExternal && ext.runtime.onMessageExternal.addListener) 
   })().then(responder, (e) => responder({ ok: false, error: String(e && e.message || e) }));
   return true;
 });
+async function auditar(accion, detalle, origen) {
+  try {
+    const s = await ext.storage.local.get({ auditoria: [] });
+    const a = s.auditoria || [];
+    a.push({ at: new Date().toISOString(), accion: String(accion || ""), detalle: String(detalle || "").slice(0, 300), origen: String(origen || "agent") });
+    await ext.storage.local.set({ auditoria: a.slice(-100) });
+  } catch (e) {}
+}
+async function puedeLeer() { const s = await ext.storage.local.get({ selftest: false, drive: false }); return !!(s.selftest || s.drive); }
+async function puedeActuar(dominio) {
+  const s = await ext.storage.local.get({ drive: false, write: {} });
+  if (!s.drive) return false;
+  const d = String(dominio || "").toLowerCase();
+  return Object.keys(s.write || {}).some((k) => d === k || d.endsWith("." + k));
+}
+async function ejecutarComando(cmd, vistos) {
+  if (!cmd || !cmd.id || (vistos && vistos.has(cmd.id))) return 0;
+  if (vistos) vistos.add(cmd.id);
+  try {
+    if (cmd.action === "diagnostico" && cmd.url) await diagnosticar(cmd.url);
+    else if (cmd.action === "fetch_page" && cmd.url) await fetchPage(cmd.url);
+    else if (cmd.action === "selftest") await autoPrueba("remote:" + cmd.id);
+    else return 0;
+    await auditar("cmd", cmd.action + " " + (cmd.url || cmd.id || ""), "agent");
+    return 1;
+  } catch (e) { return 0; }
+}
+async function revisarComandosDirectos() {
+  const c = await cfgDirect();
+  if (c.error) return { ok: false };
+  let j;
+  try {
+    const r = await Promise.race([fetch(`${c.inbox_url}/api/cmd`, { headers: { authorization: `Bearer ${c.device_token}` } }), espera(DIAG_MS)]);
+    if (!r.ok) return { ok: false };
+    j = await r.json();
+  } catch (e) { return { ok: false }; }
+  if (!j || !j.cmd) return { ok: true, hechos: 0 };
+  const s = await ext.storage.local.get({ cmd_vistos: [] });
+  const vistos = new Set(s.cmd_vistos || []);
+  const hechos = await ejecutarComando(j.cmd, vistos);
+  await ext.storage.local.set({ cmd_vistos: [...vistos].slice(-50) });
+  return { ok: true, hechos };
+}
+async function fetchPage(url) {
+  const u = String(url || "").slice(0, 500);
+  let host = "";
+  try { host = new URL(u).hostname.toLowerCase(); } catch (e) { return { ok: false, error: "bad url" }; }
+  if (!(await puedeActuar(host))) { await auditar("rechazado", "fetch_page " + host, "worker"); return { ok: false, error: "drive mode or domain not allowed" }; }
+  await auditar("fetch_page", u, "agent");
+  let tab = null;
+  try {
+    tab = await ext.tabs.create({ url: u, active: false });
+    await Promise.race([
+      new Promise((ok, no) => {
+        const f = (id, info) => { if (id === tab.id && info.status === "complete") { try { ext.tabs.onUpdated.removeListener(f); } catch (e) {} ok(); } };
+        try { ext.tabs.onUpdated.addListener(f); } catch (e) { ok(); }
+        setTimeout(() => no(new Error("load timeout")), 25000);
+      }), espera(25000)]);
+    await new Promise((r) => setTimeout(r, 2500));   // React paints late
+    const st = await Promise.race([ext.tabs.sendMessage(tab.id, { tipo: "diagnosticar" }), espera(DIAG_MS)]);
+    const out = { ok: true, url: u, state: st || null };
+    try {
+      const acts = [];
+      for (const p of (st && st.posts) || []) {
+        if (p.text && p.text.length > 50) acts.push(enviar({ v: 2, kind: "followup", clicked_at: new Date().toISOString(),
+          id: p.id, handle: p.handle, url: p.url, text: p.text, truncated: p.truncated, links: p.links || [] }));
+      }
+      if (st && st.aid && (st.article_chars || 0) > 200) acts.push(enviar({ v: 2, kind: "article", clicked_at: new Date().toISOString(),
+        id: "article:" + st.aid, url: u, article_id: st.aid, title: st.article_title || "",
+        body: st.article_body || "", truncated: (st.article_chars || 0) >= 100000 }));
+      await Promise.all(acts);
+      out.sent = acts.length;
+    } catch (e) { out.send_error = String((e && e.message) || e).slice(0, 120); }
+    await auditar("fetch_page_done", u + " chars=" + ((st && st.article_chars) || 0), "agent");
+    try {
+      await enviar({ v: 2, kind: "diagnostico", clicked_at: new Date().toISOString(),
+        id: "diag-" + Date.now().toString(36), url: u,
+        traza: { at: new Date().toISOString(), version: ext.runtime.getManifest().version, url: u, fetch: out },
+        text: JSON.stringify({ fetch_page: u, sent: out.sent || 0, article_chars: (st && st.article_chars) || 0, posts: ((st && st.posts) || []).length }).slice(0, 500) });
+    } catch (e) {}
+    return out;
+  } catch (e) {
+    await auditar("fetch_page_error", u + " " + String((e && e.message) || e).slice(0, 120), "agent");
+    try {
+      await enviar({ v: 2, kind: "diagnostico", clicked_at: new Date().toISOString(),
+        id: "diag-" + Date.now().toString(36), url: u,
+        traza: { at: new Date().toISOString(), version: ext.runtime.getManifest().version, url: u,
+                 fetch: { ok: false, error: String((e && e.message) || e).slice(0, 160) } },
+        text: JSON.stringify({ fetch_page: u, error: String((e && e.message) || e).slice(0, 120) }) });
+    } catch (e2) {}
+    return { ok: false, error: String((e && e.message) || e).slice(0, 160) };
+  } finally {
+    try { if (tab) await ext.tabs.remove(tab.id); } catch (e) {}
+  }
+}
+async function autoPrueba(motivo) {
+  const trace = { at: new Date().toISOString(), version: ext.runtime.getManifest().version, motivo };
+  try { trace.ping = await pingDirecto(await cfgDirect()).then(() => true).catch((e) => String((e && e.message) || e).slice(0, 80)); }
+  catch (e) { trace.ping = String((e && e.message) || e).slice(0, 80); }
+  const s = await ext.storage.local.get({ pending_links: {}, truncated_recent: [] });
+  trace.pendientes = Object.keys(s.pending_links || {}).length;
+  trace.truncados = (s.truncated_recent || []).length;
+  let resueltos = 0;
+  for (const [aid, p] of Object.entries(s.pending_links || {})) {
+    if (Date.now() - Date.parse(p.at || 0) > 7 * 864e5) { delete s.pending_links[aid]; continue; }
+    resueltos++;
+  }
+  trace.pendientes_vivos = resueltos;
+  await ext.storage.local.set({ pending_links: s.pending_links });
+  const q = await ext.storage.local.get({ cola: [] });
+  trace.cola = (q.cola || []).length;
+  const item = { v: 2, kind: "selftest", clicked_at: trace.at, url: "selftest:" + motivo,
+    id: "self-" + Date.now().toString(36), traza: trace, text: JSON.stringify(trace).slice(0, 2000) };
+  const r = await enviar(item);
+  return Object.assign({ uid: item.uid, trace }, r);
+}
+
 if (typeof module !== "undefined") module.exports = { parseCodigo, INBOX_DEFAULT, INBOX_CANDIDATES, sondear, autoconectar };

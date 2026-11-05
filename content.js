@@ -336,9 +336,19 @@
         const a = aid ? articleText(root.document) : null;
         let tcos = 0;
         try { tcos = root.document.querySelectorAll('a[href*="t.co"]').length; } catch (e) {}
+        const posts = [];
+        try {
+          for (const art of root.document.querySelectorAll("article")) {
+            if (posts.length >= 5) break;
+            const like = art.querySelector('[data-testid="like"],[data-testid="unlike"]');
+            const dd = like && extraer(like, root.location.pathname);
+            if (dd && dd.id) posts.push({ id: dd.id, handle: dd.handle, url: dd.url,
+              text: (dd.text || "").slice(0, 5000), truncated: !!dd.truncated, links: dd.links || [] });
+          }
+        } catch (e) {}
         responder({ ok: true, aid, detail: d, article_chars: a ? a.body.length : 0,
           article_title: a ? a.title.slice(0, 120) : null, tco_links: tcos,
-          cards: articleCards(root.document),
+          cards: articleCards(root.document), posts,
           url: String(root.location.href).slice(0, 200) });
       } catch (e) { responder({ ok: false, error: String(e).slice(0, 120) }); }
     });

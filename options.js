@@ -265,3 +265,23 @@ $("importar").onchange = async (e) => {
 };
 ext.storage.onChanged.addListener(() => pintar());
 pintar();
+const hora = (s) => { try { return s ? new Date(s).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""; } catch (e) { return ""; } };
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+function diagResumen(it) {
+  const z = it.traza || {};
+  if (z.error) return "diag failed: " + String(z.error).slice(0, 60);
+  const que = z.es_articulo ? ("article " + z.es_articulo) : z.es_tweet ? ("tweet " + z.es_tweet) : (it.url || "");
+  return ("diag " + que).slice(0, 120);
+}
+async function probar() {
+  const url = ($("url") && $("url").value || "").trim();
+  const box = $("diag");
+  if (!url) { if (box) box.textContent = "Paste a URL first."; return; }
+  box.textContent = "Testing…";
+  const r = await send({ tipo: "diagnostico", url });
+  box.textContent = r && r.ok
+    ? "Saved locally, sending to inbox…\n" + JSON.stringify(r.trace, null, 1).slice(0, 1200)
+    : "Test failed: " + ((r && r.error) || "no answer from background");
+  pintar();
+  setTimeout(async () => { await send({ tipo: "acuses" }); pintar(); }, 8000);
+}
