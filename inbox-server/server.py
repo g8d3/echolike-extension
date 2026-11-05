@@ -1404,7 +1404,7 @@ class DB:
                           else close["commission_pct"]])
         return buf.getvalue()
 
-    def list_codes(self, limit=100, agent=None, state=None, month=None, offset=0, bound_to=None, bound_only=False, redeemed_by=None, settled_month=None, currency=None, has_sale=None, min_credits=None, max_credits=None, reason=None, expired=None, sale_ref=None, expires_month=None, code=None, min_sale=None, max_sale=None):
+    def list_codes(self, limit=100, agent=None, state=None, month=None, offset=0, bound_to=None, bound_only=False, redeemed_by=None, settled_month=None, currency=None, has_sale=None, min_credits=None, max_credits=None, reason=None, expired=None, sale_ref=None, expires_month=None, code=None, min_sale=None, max_sale=None, day=None):
         """Prepaid code inventory, newest first.
 
         Read-only view over grant_codes for the owner (localhost GET
@@ -1515,7 +1515,13 @@ class DB:
         worth chasing first); a positive number keeps sale_amount<=N,
         codes minted without a recorded sale never match,
         blank/junk/zero/negative means every code.
-        agent, state, month, settled_month, expires_month, bound_to,
+        day is an optional exact-day filter on created_at in YYYY-MM-DD
+        (localhost GET /api/codes?day=2026-11-04 answers 'which codes
+        entered the book today' without grepping the full book, next to
+        the /api/grants?day= filter); None, blank or 'all' means every
+        day, a malformed day raises ValueError (the route answers 400,
+        same vocabulary as month).
+        agent, state, month, day, settled_month, expires_month, bound_to,
         bound_only, redeemed_by, currency, has_sale, min_credits,
         max_credits, reason, expired, sale_ref, code, min_sale
         and max_sale combine (AND).
@@ -1576,6 +1582,13 @@ class DB:
             m = self._norm_month(month)
             if m is None:
                 raise ValueError("month must be YYYY-MM")
+        dd = None
+        if isinstance(day, str) and day.strip().lower() == "all":
+            day = None
+        if day is not None and (not isinstance(day, str) or day.strip()):
+            dd = self._norm_day(day)
+            if dd is None:
+                raise ValueError("day must be YYYY-MM-DD")
         try:
             conds = []
             params = []
@@ -1639,6 +1652,9 @@ class DB:
             if want_xsale is not None:
                 conds.append("sale_amount<=?")
                 params.append(want_xsale)
+            if dd:
+                conds.append("substr(created_at,1,10)=?")
+                params.append(dd)
             where = ("WHERE " + " AND ".join(conds)) if conds else ""
             params.append(limit)
             params.append(offset)
@@ -1659,7 +1675,7 @@ class DB:
                  "bringer": r[11] or None,
                  "bound_to": r[12] or None} for r in rows]
 
-    def codes_csv(self, limit=100, agent=None, state=None, month=None, offset=0, bound_to=None, bound_only=False, redeemed_by=None, settled_month=None, currency=None, has_sale=None, min_credits=None, max_credits=None, reason=None, expired=None, sale_ref=None, expires_month=None, code=None, min_sale=None, max_sale=None):
+    def codes_csv(self, limit=100, agent=None, state=None, month=None, offset=0, bound_to=None, bound_only=False, redeemed_by=None, settled_month=None, currency=None, has_sale=None, min_credits=None, max_credits=None, reason=None, expired=None, sale_ref=None, expires_month=None, code=None, min_sale=None, max_sale=None, day=None):
         """Sales book as CSV, newest first (same rows as list_codes).
 
         One header row plus one row per code for the owner (localhost GET
@@ -1709,7 +1725,9 @@ class DB:
         sale never match, anything else = every code). max_sale is the
         same optional ceiling on the recorded sale_amount (positive
         number keeps sale_amount<=N, codes without a recorded sale never
-        match, anything else = every code).
+        match, anything else = every code). day is the same optional
+        exact-day filter in YYYY-MM-DD on created_at (None/blank/'all' =
+        every day, malformed raises ValueError for a 400).
         offset is the same optional row skip as list_codes (paging past the
         500-row cap, junk/negative reads as 0). Totals stay
         whole-book by design (see get_sales_totals). New export only: list_codes,
@@ -1720,7 +1738,7 @@ class DB:
         buf = io.StringIO(newline="")
         w = csv.writer(buf)
         w.writerow(cols)
-        for row in self.list_codes(limit, agent, state, month, offset, bound_to, bound_only, redeemed_by, settled_month, currency, has_sale, min_credits, max_credits, reason, expired, sale_ref, expires_month, code, min_sale, max_sale):
+        for row in self.list_codes(limit, agent, state, month, offset, bound_to, bound_only, redeemed_by, settled_month, currency, has_sale, min_credits, max_credits, reason, expired, sale_ref, expires_month, code, min_sale, max_sale, day):
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
@@ -1849,11 +1867,11 @@ class DB:
             for a in sorted(per_agent_day)}
         return zero
 
-    def get_filtered_sales_totals(self, agent=None, state=None, month=None, bound_to=None, bound_only=False, redeemed_by=None, settled_month=None, currency=None, has_sale=None, min_credits=None, max_credits=None, reason=None, expired=None, sale_ref=None, expires_month=None, code=None, min_sale=None, max_sale=None):
+    def get_filtered_sales_totals(self, agent=None, state=None, month=None, bound_to=None, bound_only=False, redeemed_by=None, settled_month=None, currency=None, has_sale=None, min_credits=None, max_credits=None, reason=None, expired=None, sale_ref=None, expires_month=None, code=None, min_sale=None, max_sale=None, day=None):
         """Recorded revenue over the sales-book filter, read-only.
 
         {codes, redeemed, revoked, outstanding, with_sale, sales:{CUR: total}}
-        over exactly the rows list_codes(limit, agent, state, month, settled_month, expires_month, bound_to, redeemed_by, currency, has_sale, min_credits, max_credits, reason, expired, min_sale, max_sale) would
+        over exactly the rows list_codes(limit, agent, state, month, day, settled_month, expires_month, bound_to, redeemed_by, currency, has_sale, min_credits, max_credits, reason, expired, min_sale, max_sale) would
         list (localhost GET /api/codes serves it as filtered next to codes,
         so the owner reads the recorded revenue for one bringer, one state,
         one mint month, the earmarked slice, one redeemer's codes, one
@@ -1880,7 +1898,9 @@ class DB:
         redeemed/revoked/outstanding (None/blank/'all' = every state,
         unknown states report zeros beside the empty row list), month
         mint-month YYYY-MM on created_at (None/blank/'all' = every month,
-        malformed raises ValueError for a 400). min_credits is the same
+        malformed raises ValueError for a 400). day is the same optional
+        exact-day filter in YYYY-MM-DD on created_at (None/blank/'all' =
+        every day, malformed raises ValueError for a 400). min_credits is the same
         optional credit floor (positive integer keeps credits>=N, anything
         else = every code). max_credits is the same optional credit
         ceiling (positive integer keeps credits<=N, anything else = every
@@ -1900,8 +1920,8 @@ class DB:
         is the same optional ceiling on the recorded sale_amount
         (positive number keeps sale_amount<=N, codes without a recorded
         sale never match, anything else = every code). Sums round to 9 decimals
-        (a lamport). No new table, never an error except the malformed
-        month. New totals only: list_codes, /api/codes rows/totals,
+        (a lamport). No new table, never an error except a malformed
+        month or day. New totals only: list_codes, /api/codes rows/totals,
         /api/usage, badge, history and health shapes untouched."""
         zero = {"codes": 0, "redeemed": 0, "revoked": 0, "outstanding": 0,
                 "with_sale": 0, "sales": {}}
@@ -1947,6 +1967,13 @@ class DB:
             m = self._norm_month(month)
             if m is None:
                 raise ValueError("month must be YYYY-MM")
+        dd = None
+        if isinstance(day, str) and day.strip().lower() == "all":
+            day = None
+        if day is not None and (not isinstance(day, str) or day.strip()):
+            dd = self._norm_day(day)
+            if dd is None:
+                raise ValueError("day must be YYYY-MM-DD")
         try:
             conds = []
             params = []
@@ -2010,6 +2037,9 @@ class DB:
             if want_xsale is not None:
                 conds.append("sale_amount<=?")
                 params.append(want_xsale)
+            if dd:
+                conds.append("substr(created_at,1,10)=?")
+                params.append(dd)
             where = ("WHERE " + " AND ".join(conds)) if conds else ""
             rows = self.c.execute(
                 "SELECT redeemed_by, revoked, sale_amount, sale_currency "
@@ -2750,18 +2780,24 @@ def make_handler(db):
                 want_code = parse_code(q.get("code", [None])[0])
                 want_msale = parse_min_sale(q.get("min_sale", [None])[0])
                 want_xsale = parse_max_sale(q.get("max_sale", [None])[0])
+                day0 = q.get("day", [None])[0]
                 try:
-                    codes = db.list_codes(limit, want, st, mo, offset, want_bound, bound_only, want_redeemer, smo, want_cur, want_sale, want_min, want_max, want_reason, want_exp, want_sref, emo, want_code, want_msale, want_xsale)
-                    filtered = db.get_filtered_sales_totals(want, st, mo, want_bound, bound_only, want_redeemer, smo, want_cur, want_sale, want_min, want_max, want_reason, want_exp, want_sref, emo, want_code, want_msale, want_xsale)
+                    codes = db.list_codes(limit, want, st, mo, offset, want_bound, bound_only, want_redeemer, smo, want_cur, want_sale, want_min, want_max, want_reason, want_exp, want_sref, emo, want_code, want_msale, want_xsale, day0)
+                    filtered = db.get_filtered_sales_totals(want, st, mo, want_bound, bound_only, want_redeemer, smo, want_cur, want_sale, want_min, want_max, want_reason, want_exp, want_sref, emo, want_code, want_msale, want_xsale, day0)
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 if mo is not None:
                     mo = db._norm_month(mo)
+                dd = day0.strip() if isinstance(day0, str) and day0.strip() else None
+                if isinstance(dd, str) and dd.lower() == "all":
+                    dd = None
+                if dd is not None:
+                    dd = db._norm_day(dd)
                 if smo is not None:
                     smo = db._norm_month(smo)
                 if emo is not None:
                     emo = db._norm_month(emo)
-                return self._json({"ok": True, "agent": want, "bound_to": want_bound, "bound_only": bound_only, "redeemed_by": want_redeemer, "settled_month": smo, "expires_month": emo, "currency": want_cur, "has_sale": want_sale, "min_credits": want_min, "max_credits": want_max, "reason": want_reason, "expired": want_exp, "sale_ref": want_sref, "code": want_code, "min_sale": want_msale, "max_sale": want_xsale, "state": st, "month": mo,
+                return self._json({"ok": True, "agent": want, "bound_to": want_bound, "bound_only": bound_only, "redeemed_by": want_redeemer, "settled_month": smo, "expires_month": emo, "currency": want_cur, "has_sale": want_sale, "min_credits": want_min, "max_credits": want_max, "reason": want_reason, "expired": want_exp, "sale_ref": want_sref, "code": want_code, "min_sale": want_msale, "max_sale": want_xsale, "state": st, "month": mo, "day": dd,
                                      "codes": codes,
                                      "filtered": filtered,
                                      "totals": db.get_sales_totals()})
@@ -2811,12 +2847,13 @@ def make_handler(db):
                 want_code = parse_code(q.get("code", [None])[0])
                 want_msale = parse_min_sale(q.get("min_sale", [None])[0])
                 want_xsale = parse_max_sale(q.get("max_sale", [None])[0])
+                day0 = q.get("day", [None])[0]
                 emonth = q.get("expires_month", [None])[0]
                 emo = emonth.strip() if isinstance(emonth, str) and emonth.strip() else None
                 if emo is not None and emo.lower() == "all":
                     emo = None
                 try:
-                    b = db.codes_csv(limit, want, st, mo, offset, want_bound, bound_only, want_redeemer, smo, want_cur, want_sale, want_min, want_max, want_reason, want_exp, want_sref, emo, want_code, want_msale, want_xsale).encode()
+                    b = db.codes_csv(limit, want, st, mo, offset, want_bound, bound_only, want_redeemer, smo, want_cur, want_sale, want_min, want_max, want_reason, want_exp, want_sref, emo, want_code, want_msale, want_xsale, day0).encode()
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 self.send_response(200)
