@@ -994,7 +994,7 @@ class DB:
         return {a: {k: round(v, 9) for k, v in sorted(cur.items())}
                 for a, cur in sorted(out.items())}
 
-    def list_payouts(self, limit=100, agent=None, month=None, offset=0):
+    def list_payouts(self, limit=100, agent=None, month=None, offset=0, day=None):
         """Off-band payout ledger, newest first, read-only.
 
         [{at, day, agent, amount, currency, ref}] over the payouts table
@@ -1011,11 +1011,16 @@ class DB:
         this month' next to the per-month /api/close reckoning); None,
         blank or 'all' means every month, a malformed month raises
         ValueError (the route answers 400, same vocabulary as /api/close
-        and /api/codes?month=). agent and month combine (AND). offset
+        and /api/codes?month=). agent, month and day combine (AND). offset
         is an optional row skip for paging past the 500-row cap
         (localhost GET /api/payouts?limit=100&offset=100 answers 'the next
         page of the same ledger'); junk/negative reads as 0, beyond-the-book
-        reads [], totals ignore it (whole filter, never the window)."""
+        reads [], totals ignore it (whole filter, never the window). day
+        is an optional exact-day filter in YYYY-MM-DD (localhost GET
+        /api/payouts?day=2026-11-04 answers 'what did I pay out today'
+        without grepping the ledger); None, blank or 'all' means every
+        day, a malformed day raises ValueError (the route answers 400,
+        same vocabulary as /api/codes?day= and /api/grants?day=)."""
         try:
             offset = int(offset)
         except (TypeError, ValueError):
@@ -1043,6 +1048,16 @@ class DB:
             if m:
                 conds.append("substr(day,1,7)=?")
                 params.append(m)
+            dd = None
+            if isinstance(day, str) and day.strip().lower() == "all":
+                day = None
+            if day is not None and (not isinstance(day, str) or day.strip()):
+                dd = self._norm_day(day)
+                if dd is None:
+                    raise ValueError("day must be YYYY-MM-DD")
+            if dd:
+                conds.append("day=?")
+                params.append(dd)
             where = ("WHERE " + " AND ".join(conds)) if conds else ""
             params.append(limit)
             params.append(offset)
@@ -1056,7 +1071,7 @@ class DB:
                  "amount": r[3], "currency": r[4],
                  "ref": r[5] or ""} for r in rows]
 
-    def get_payout_totals(self, agent=None, month=None):
+    def get_payout_totals(self, agent=None, month=None, day=None):
         """Paid-out totals over the same filter as list_payouts().
 
         {payouts, paid}: how many off-band payments the owner recorded and
@@ -1066,6 +1081,8 @@ class DB:
         filter (None/blank = every bringer, unknown bringers report zeros)
         and month the same optional pay-month filter in YYYY-MM on day
         (None/blank/'all' = every month, malformed raises ValueError for
+        a 400). day is the same optional exact-day filter in YYYY-MM-DD
+        (None/blank/'all' = every day, malformed raises ValueError for
         a 400). Totals cover the whole filter, never just the ?limit=
         window of the row list. Sums round to 9 decimals (a lamport).
         Read-only, never an error (a book without the payouts table reads
@@ -1089,6 +1106,16 @@ class DB:
             if m:
                 conds.append("substr(day,1,7)=?")
                 params.append(m)
+            dd = None
+            if isinstance(day, str) and day.strip().lower() == "all":
+                day = None
+            if day is not None and (not isinstance(day, str) or day.strip()):
+                dd = self._norm_day(day)
+                if dd is None:
+                    raise ValueError("day must be YYYY-MM-DD")
+            if dd:
+                conds.append("day=?")
+                params.append(dd)
             where = ("WHERE " + " AND ".join(conds)) if conds else ""
             n = self.c.execute("SELECT COUNT(*) FROM payouts " + where,
                                tuple(params)).fetchone()
@@ -1162,7 +1189,7 @@ class DB:
                 "payouts": self.list_payouts(limit, want, month, offset),
                 "totals": self.get_payout_totals(want, month)}
 
-    def payouts_csv(self, limit=100, agent=None, month=None, offset=0):
+    def payouts_csv(self, limit=100, agent=None, month=None, offset=0, day=None):
         """Payout ledger as CSV, newest first (same rows as list_payouts).
 
         One header row plus one row per payment for the owner (localhost
@@ -1172,6 +1199,8 @@ class DB:
         JSON. agent is the same optional exact-match filter as list_payouts
         (None/blank = every bringer) and month the same optional pay-month
         filter in YYYY-MM (None/blank/'all' = every month, malformed raises
+        ValueError for a 400) and day the same optional exact-day filter
+        in YYYY-MM-DD (None/blank/'all' = every day, malformed raises
         ValueError for a 400). offset is the same optional row skip as
         list_payouts (paging past the 500-row cap, junk/negative reads as
         0). Read-only, never an error (empty
@@ -1182,7 +1211,7 @@ class DB:
         buf = io.StringIO(newline="")
         w = csv.writer(buf)
         w.writerow(cols)
-        for row in self.list_payouts(limit, agent, month, offset):
+        for row in self.list_payouts(limit, agent, month, offset, day):
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
@@ -2878,9 +2907,10 @@ def make_handler(db):
                 agent = q.get("agent", [None])[0]
                 want = agent.strip() if isinstance(agent, str) and agent.strip() else None
                 month = q.get("month", [None])[0]
+                day = q.get("day", [None])[0]
                 try:
-                    rows = db.list_payouts(limit, want, month, offset)
-                    totals = db.get_payout_totals(want, month)
+                    rows = db.list_payouts(limit, want, month, offset, day)
+                    totals = db.get_payout_totals(want, month, day)
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 mon = month.strip() if isinstance(month, str) and month.strip() else None
@@ -2888,7 +2918,13 @@ def make_handler(db):
                     mon = None
                 if mon is not None:
                     mon = db._norm_month(mon)
+                dd = day.strip() if isinstance(day, str) and day.strip() else None
+                if isinstance(dd, str) and dd.lower() == "all":
+                    dd = None
+                if dd is not None:
+                    dd = db._norm_day(dd)
                 return self._json({"ok": True, "agent": want, "month": mon,
+                                     "day": dd,
                                      "payouts": rows,
                                      "totals": totals})
             if u.path == "/api/payouts.csv":
@@ -2907,8 +2943,9 @@ def make_handler(db):
                 agent = q.get("agent", [None])[0]
                 want = agent.strip() if isinstance(agent, str) and agent.strip() else None
                 month = q.get("month", [None])[0]
+                day = q.get("day", [None])[0]
                 try:
-                    b = db.payouts_csv(limit, want, month, offset).encode()
+                    b = db.payouts_csv(limit, want, month, offset, day).encode()
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 self.send_response(200)
