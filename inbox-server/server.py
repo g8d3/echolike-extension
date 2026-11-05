@@ -1255,10 +1255,10 @@ class DB:
                 "paid": {r[0]: round(r[1], 9) for r in rows}}
 
     def get_statement(self, agent, limit=100, month=None, offset=0, day=None,
-                        currency=None):
+                        currency=None, ref=None):
         """Per-bringer payout statement in one read, newest payouts first.
 
-        {agent, month, day, currency, settled, owed, paid, payable, daily,
+        {agent, month, day, currency, ref, settled, owed, paid, payable, daily,
         payouts, totals}
         for the owner (localhost GET /api/statement?agent=X): the payout
         moment on one screen — what this bringer's clients settled, what
@@ -1286,7 +1286,14 @@ class DB:
         vocabulary as /api/payouts?currency= and /api/codes?currency=);
         None, blank or 'all' means every rail, matching is
         case-insensitive (stored upper), and it combines with agent,
-        month and day as AND. offset is the same optional
+        month and day as AND. ref is an optional tx-hash substring filter
+        on the recorded payout ref (localhost GET
+        /api/statement?agent=X&ref=abc123 answers 'which of this bringer's
+        payments did this on-chain payment settle' without grepping the
+        payout ledger, same vocabulary as /api/payouts?ref= and
+        /api/codes?sale_ref=); None or blank means every payout,
+        case-insensitive, combines with agent, month, day and currency
+        as AND. offset is the same optional
         row skip as list_payouts (localhost GET
         /api/statement?agent=X&limit=L&offset=O answers 'the next page of
         this bringer's payments' past the 500-row cap); junk/negative
@@ -1296,15 +1303,16 @@ class DB:
         paid, payable and daily stay lifetime
         (the settled reckoning for one month is the per-month /api/close).
         Slices of get_sales_totals() plus list_payouts(limit, agent, month,
-        offset, day, currency) plus get_payout_totals(agent, month, day,
-        currency); no new
+        offset, day, currency, ref) plus get_payout_totals(agent, month, day,
+        currency, ref); no new
         table, never an error except the malformed month or day, unknown
         agents report empty maps, [] and zero totals. Blank agents report
         agent None with everything empty and zero totals (the HTTP layer
         refuses them with 400: a statement is per-bringer, the full ledger
-        already answers everyone). No month, no day and no currency keep the
+        already answers everyone). No month, no day, no currency and no ref
+        keep the
         previous rows byte-identical (only the additive month: None,
-        day: None and currency: None echoes are new); no offset keeps them byte-identical too (offset
+        day: None, currency: None and ref: None echoes are new); no offset keeps them byte-identical too (offset
         only windows the row list, it is not echoed)."""
         want = agent.strip() if isinstance(agent, str) else ""
         mon = month.strip() if isinstance(month, str) and month.strip() else None
@@ -1324,9 +1332,10 @@ class DB:
         want_cur = currency.strip().upper() if isinstance(currency, str) and currency.strip() else None
         if want_cur == "ALL":
             want_cur = None
+        want_ref = parse_payout_ref(ref)
         if not want:
             return {"agent": None, "month": mon, "day": dd,
-                    "currency": want_cur, "settled": {},
+                    "currency": want_cur, "ref": want_ref, "settled": {},
                     "owed": {}, "paid": {}, "payable": {}, "daily": [],
                     "payouts": [],
                     "totals": {"payouts": 0, "paid": {}}}
@@ -1336,15 +1345,16 @@ class DB:
             t = {"by_referrer": {}, "owed": {}, "paid": {},
                  "payable": {}, "by_referrer_daily": {}}
         return {"agent": want, "month": mon, "day": dd,
-                "currency": want_cur,
+                "currency": want_cur, "ref": want_ref,
                 "settled": t.get("by_referrer", {}).get(want, {}),
                 "owed": t.get("owed", {}).get(want, {}),
                 "paid": t.get("paid", {}).get(want, {}),
                 "payable": t.get("payable", {}).get(want, {}),
                 "daily": t.get("by_referrer_daily", {}).get(want, []),
                 "payouts": self.list_payouts(limit, want, month, offset, day,
-                                           currency),
-                "totals": self.get_payout_totals(want, month, day, currency)}
+                                           currency, ref),
+                "totals": self.get_payout_totals(want, month, day, currency,
+                                                 ref)}
 
     def payouts_csv(self, limit=100, agent=None, month=None, offset=0, day=None, currency=None, ref=None, min_paid=None, max_paid=None):
         """Payout ledger as CSV, newest first (same rows as list_payouts).
@@ -1380,7 +1390,7 @@ class DB:
         return buf.getvalue()
 
     def statement_csv(self, agent, limit=100, month=None, offset=0, day=None,
-                          currency=None):
+                          currency=None, ref=None):
         """One bringer's payout rows as CSV, newest first.
 
         One header row plus one row per payment for the owner (localhost
@@ -1397,6 +1407,8 @@ class DB:
         ledger, same vocabulary as /api/payouts?currency= and
         /api/codes?currency=); None, blank or 'all' means every rail,
         case-insensitive, combines with agent, month and day as AND.
+        ref is the same optional tx-hash substring filter as get_statement()
+        (None/blank = every payout, case-insensitive, combines as AND).
         offset is the same optional row skip as list_payouts (localhost GET /api/statement.csv?agent=X&offset=O
         answers 'the next page of this bringer's payments'); junk/negative
         reads as 0, beyond-the-book reads header only. None renders as an
@@ -1416,7 +1428,7 @@ class DB:
         if not want:
             return buf.getvalue()
         for row in self.list_payouts(limit, want, month, offset, day,
-                                       currency):
+                                       currency, ref):
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
@@ -3241,13 +3253,14 @@ def make_handler(db):
                 month = q.get("month", [None])[0]
                 day = q.get("day", [None])[0]
                 currency = q.get("currency", [None])[0]
+                ref = q.get("ref", [None])[0]
                 try:
                     offset = max(0, int(q.get("offset", ["0"])[0]))
                 except ValueError:
                     offset = 0
                 try:
                     st = db.get_statement(want, limit, month, offset, day,
-                                          currency)
+                                          currency, ref)
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 return self._json({"ok": True, **st})
@@ -3267,13 +3280,14 @@ def make_handler(db):
                 month = q.get("month", [None])[0]
                 day = q.get("day", [None])[0]
                 currency = q.get("currency", [None])[0]
+                ref = q.get("ref", [None])[0]
                 try:
                     offset = max(0, int(q.get("offset", ["0"])[0]))
                 except ValueError:
                     offset = 0
                 try:
                     b = db.statement_csv(want, limit, month, offset, day,
-                                         currency).encode()
+                                         currency, ref).encode()
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 self.send_response(200)
