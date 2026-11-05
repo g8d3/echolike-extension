@@ -410,6 +410,30 @@ def parse_min_spent(v):
     return n if n > 0 else None
 
 
+def parse_max_spent(v):
+    """Maximum-spent filter for the owner reckoning: float or None.
+
+    A positive number keeps only by_buyer rows whose lifetime spent is at
+    most that much (localhost GET /api/reckoning?max_spent=50 answers
+    'which buyers spent at most 50' when the owner caps the top-up table
+    from above instead of scrolling past every whale, same vocabulary as
+    /api/codes?max_sale=, /api/payouts?max_paid= and
+    /api/close?max_settled=, and with ?min_spent=N it frames the
+    money-side value band; same band the other four books already
+    frame); None = every buyer. Accepts real ints/floats for direct DB
+    calls; blank/junk/zero/negative reads as None (every buyer), never
+    an error."""
+    if isinstance(v, bool):
+        return None
+    if v is None:
+        return None
+    try:
+        n = float(v.strip() if isinstance(v, str) else v)
+    except (TypeError, ValueError, AttributeError):
+        return None
+    return n if n > 0 else None
+
+
 def is_private(ip):
     """LAN, Tailscale and loopback: places where getting in already means trust."""
     try:
@@ -2749,7 +2773,8 @@ class DB:
             return {"grants": 0, "credits": 0}
         return {"grants": row[0] if row else 0, "credits": row[1] if row else 0}
 
-    def get_reckoning(self, needs_topup_only=False, min_spent=None):
+    def get_reckoning(self, needs_topup_only=False, min_spent=None,
+                      max_spent=None):
         """Whole cash register in one read, newest shape additive only.
 
         {sales, payouts, grants, quota}: the three whole-book totals side by side
@@ -2785,7 +2810,12 @@ class DB:
         means every buyer, same vocabulary as /api/codes?min_sale=,
         /api/payouts?min_paid= and /api/close?min_settled=, never an
         error; the floor is not echoed, mirroring the flag, so no param
-        keeps the previous rows byte-identical). The two windows combine
+        keeps the previous rows byte-identical). max_spent is an optional
+        spent-value ceiling over quota.by_buyer (localhost GET
+        /api/reckoning?max_spent=50 answers 'which buyers spent at most
+        50' when the owner caps the top-up table from above; same rules
+        as the floor, never an error, not echoed either). The three
+        windows combine
         (AND): the bill-first queue inside one money band. needs_topup_n
         counts the served window in every case.
         Read-only, never an error, empty
@@ -2827,6 +2857,12 @@ class DB:
                         if isinstance(e, dict)
                         and isinstance(e.get("spent"), (int, float))
                         and e.get("spent") >= want_min]
+        want_max = parse_max_spent(max_spent)
+        if want_max is not None:
+            by_buyer = [e for e in by_buyer
+                        if isinstance(e, dict)
+                        and isinstance(e.get("spent"), (int, float))
+                        and e.get("spent") <= want_max]
         quota["by_buyer"] = by_buyer
         try:
             quota["needs_topup_n"] = sum(
@@ -2836,7 +2872,8 @@ class DB:
             quota["needs_topup_n"] = 0
         return {"sales": sales, "payouts": payouts, "grants": grants, "quota": quota}
 
-    def reckoning_csv(self, needs_topup_only=False, min_spent=None):
+    def reckoning_csv(self, needs_topup_only=False, min_spent=None,
+                      max_spent=None):
         """Whole cash register as CSV, one summary row per figure.
 
         One header row plus one row per figure for the owner (localhost
@@ -2866,7 +2903,12 @@ class DB:
         previous rows byte-identical) and min_spent=N serves only the
         buyers whose lifetime spent is at least N (localhost GET
         /api/reckoning.csv?min_spent=50; junk reads as off, same
-        vocabulary as /api/codes?min_sale=; the two windows combine)
+        vocabulary as /api/codes?min_sale=; all three windows combine)
+        and max_spent=N serves only the buyers whose lifetime spent is
+        at most N (localhost GET /api/reckoning.csv?max_spent=50; junk
+        reads as off, same vocabulary as /api/codes?max_sale=; with
+        min_spent it frames the money-side value band, so the three
+        windows combine)
         while every aggregate row — sales,
         commission, payouts, grants, would_block totals and
         needs_topup_buyers (which then counts the served
@@ -2878,7 +2920,7 @@ class DB:
         w = csv.writer(buf)
         w.writerow(cols)
         try:
-            r = self.get_reckoning(needs_topup_only, min_spent)
+            r = self.get_reckoning(needs_topup_only, min_spent, max_spent)
         except sqlite3.Error:
             r = {"sales": {}, "payouts": {}, "grants": {}, "quota": {}}
         sales = r.get("sales") or {}
@@ -3537,7 +3579,8 @@ def make_handler(db):
                 q = parse_qs(u.query)
                 flag = (q.get("needs_topup", [""])[0] or "").strip().lower() in ("1", "true", "yes")
                 floor = parse_min_spent((q.get("min_spent", [""])[0] or "").strip() or None)
-                return self._json({"ok": True, **db.get_reckoning(flag, floor)})
+                ceil = parse_max_spent((q.get("max_spent", [""])[0] or "").strip() or None)
+                return self._json({"ok": True, **db.get_reckoning(flag, floor, ceil)})
             if u.path == "/api/reckoning.csv":
                 peer = (self.client_address[0] if self.client_address else "")
                 if peer not in ("127.0.0.1", "::1"):
@@ -3545,7 +3588,8 @@ def make_handler(db):
                 q = parse_qs(u.query)
                 flag = (q.get("needs_topup", [""])[0] or "").strip().lower() in ("1", "true", "yes")
                 floor = parse_min_spent((q.get("min_spent", [""])[0] or "").strip() or None)
-                b = db.reckoning_csv(flag, floor).encode()
+                ceil = parse_max_spent((q.get("max_spent", [""])[0] or "").strip() or None)
+                b = db.reckoning_csv(flag, floor, ceil).encode()
                 self.send_response(200)
                 self.send_header("content-type", "text/csv; charset=utf-8")
                 self.send_header("content-length", str(len(b)))
