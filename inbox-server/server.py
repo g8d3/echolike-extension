@@ -214,6 +214,30 @@ def parse_code(v):
     return s[:200] if s else None
 
 
+def parse_origin(v):
+    """Funding-origin filter for the grants ledger: 'redeemed'/'manual'/None.
+
+    'redeemed' keeps only grants funded by a redeemed prepaid code (the sold
+    side: localhost GET /api/grants?origin=redeemed answers 'which funded
+    credits did buyers pay for' when the owner ties sold revenue to funded
+    credits); 'manual' keeps only hand-recorded grants with no code (the free
+    side: founder credits, promos, post-payment top-ups); None = every grant.
+    Matched case-insensitively with surrounding blanks stripped; blank/'all'/
+    junk/non-string reads as None (every grant), never an error."""
+    if v is None:
+        return None
+    if not isinstance(v, str):
+        return None
+    s = v.strip().lower()
+    if s in ("", "all"):
+        return None
+    if s == "redeemed":
+        return "redeemed"
+    if s == "manual":
+        return "manual"
+    return None
+
+
 def parse_min_sale(v):
     """Minimum-sale filter for the sales book: float or None.
 
@@ -2040,7 +2064,7 @@ class DB:
             return []
         return [{"day": r[0], "credits": r[1], "reason": r[2]} for r in rows]
 
-    def list_grants(self, limit=100, user=None, month=None, offset=0, reason=None, min_credits=None, max_credits=None, day=None, referred_by=None, code=None):
+    def list_grants(self, limit=100, user=None, month=None, offset=0, reason=None, min_credits=None, max_credits=None, day=None, referred_by=None, code=None, origin=None):
         """Manual-grant ledger for the owner, newest first, read-only.
 
         [{at, day, user_id, credits, reason, code}] over the grants table for the
@@ -2098,8 +2122,12 @@ class DB:
         without grepping the ledger, completing the 1:1 sales->credits
         tie of the code stamp); matched case-insensitively as a
         substring, None/blank = every grant, manual and pre-stamp rows
-        (code '') never match. user, month, day, reason,
-        min_credits, max_credits, referred_by and code combine (AND)."""
+        (code '') never match. origin is an optional funding-origin filter
+        (localhost GET /api/grants?origin=redeemed answers 'which funded
+        credits did buyers pay for', ?origin=manual answers 'which did I
+        hand out free'; blank/'all'/junk = every grant, never an error).
+        user, month, day, reason,
+        min_credits, max_credits, referred_by, code and origin combine (AND)."""
         try:
             offset = int(offset)
         except (TypeError, ValueError):
@@ -2157,6 +2185,11 @@ class DB:
             if want_code is not None:
                 conds.append("INSTR(lower(code), lower(?))>0")
                 params.append(want_code)
+            want_origin = parse_origin(origin)
+            if want_origin == "redeemed":
+                conds.append("COALESCE(code,'')<>''")
+            elif want_origin == "manual":
+                conds.append("COALESCE(code,'')=''")
             where = ("WHERE " + " AND ".join(conds)) if conds else ""
             params.append(limit)
             params.append(offset)
@@ -2169,7 +2202,7 @@ class DB:
         return [{"at": r[0], "day": r[1], "user_id": r[2],
                  "credits": r[3], "reason": r[4] or "", "code": r[5] or ""} for r in rows]
 
-    def grants_csv(self, limit=100, user=None, month=None, offset=0, reason=None, min_credits=None, max_credits=None, day=None, referred_by=None, code=None):
+    def grants_csv(self, limit=100, user=None, month=None, offset=0, reason=None, min_credits=None, max_credits=None, day=None, referred_by=None, code=None, origin=None):
         """Manual-grant ledger as CSV, newest first (same rows as list_grants).
 
         One header row plus one row per manual grant for the owner
@@ -2196,7 +2229,9 @@ class DB:
         list_grants (None/blank = every grant, unknown bringers header
         only, never an error). code is the same optional code-substring
         filter as list_grants (None/blank = every grant, manual and
-        pre-stamp rows header only, never an error).
+        pre-stamp rows header only, never an error). origin is the same
+        optional funding-origin filter as list_grants (None/blank/junk =
+        every grant).
         New export only:
         /api/grants rows carry the same code stamp (same shape),
         grant recording, redeem, /api/usage,
@@ -2206,11 +2241,11 @@ class DB:
         buf = io.StringIO(newline="")
         w = csv.writer(buf)
         w.writerow(cols)
-        for row in self.list_grants(limit, user, month, offset, reason, min_credits, max_credits, day, referred_by, code):
+        for row in self.list_grants(limit, user, month, offset, reason, min_credits, max_credits, day, referred_by, code, origin):
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
-    def get_grant_totals(self, user=None, month=None, reason=None, min_credits=None, max_credits=None, day=None, referred_by=None, code=None):
+    def get_grant_totals(self, user=None, month=None, reason=None, min_credits=None, max_credits=None, day=None, referred_by=None, code=None, origin=None):
         """Granted-credit totals over the same filter as list_grants().
 
         {grants, credits}: how many manual grants and how many credits they
@@ -2234,7 +2269,9 @@ class DB:
         unknown bringers report zeros, totals scope to the same rows).
         code is the same optional code-substring filter as list_grants
         (None/blank = every grant, manual and pre-stamp rows never match,
-        totals scope to the same rows).
+        totals scope to the same rows). origin is the same optional
+        funding-origin filter as list_grants (None/blank/junk = every
+        grant, totals scope to the same rows).
         Localhost GET /api/grants serves the scoped totals as totals and
         the unfiltered whole-book liability beside them as book (the mirror
         of /api/codes, reversed: there totals stays whole-book and the
@@ -2290,6 +2327,11 @@ class DB:
             if want_code is not None:
                 conds.append("INSTR(lower(code), lower(?))>0")
                 params.append(want_code)
+            want_origin = parse_origin(origin)
+            if want_origin == "redeemed":
+                conds.append("COALESCE(code,'')<>''")
+            elif want_origin == "manual":
+                conds.append("COALESCE(code,'')=''")
             where = ("WHERE " + " AND ".join(conds)) if conds else ""
             row = self.c.execute(
                 "SELECT COUNT(*), COALESCE(SUM(credits),0) FROM grants "
@@ -2861,9 +2903,10 @@ def make_handler(db):
                 referrer = q.get("referred_by", [None])[0]
                 want_ref = referrer.strip()[:120] if isinstance(referrer, str) and referrer.strip() else None
                 want_code = parse_code(q.get("code", [None])[0])
+                want_origin = parse_origin(q.get("origin", [None])[0])
                 try:
-                    rows = db.list_grants(limit, want, month, offset, want_reason, want_min, want_max, day, want_ref, want_code)
-                    totals = db.get_grant_totals(want, month, want_reason, want_min, want_max, day, want_ref, want_code)
+                    rows = db.list_grants(limit, want, month, offset, want_reason, want_min, want_max, day, want_ref, want_code, want_origin)
+                    totals = db.get_grant_totals(want, month, want_reason, want_min, want_max, day, want_ref, want_code, want_origin)
                     book = db.get_grant_totals()
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
@@ -2884,6 +2927,7 @@ def make_handler(db):
                                      "day": dd,
                                      "referred_by": want_ref,
                                      "code": want_code,
+                                     "origin": want_origin,
                                      "grants": rows,
                                      "totals": totals,
                                      "book": book})
@@ -2910,8 +2954,9 @@ def make_handler(db):
                 referrer = q.get("referred_by", [None])[0]
                 want_ref = referrer.strip()[:120] if isinstance(referrer, str) and referrer.strip() else None
                 want_code = parse_code(q.get("code", [None])[0])
+                want_origin = parse_origin(q.get("origin", [None])[0])
                 try:
-                    b = db.grants_csv(limit, want, month, offset, want_reason, want_min, want_max, day, want_ref, want_code).encode()
+                    b = db.grants_csv(limit, want, month, offset, want_reason, want_min, want_max, day, want_ref, want_code, want_origin).encode()
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 self.send_response(200)
