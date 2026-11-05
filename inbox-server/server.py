@@ -323,6 +323,27 @@ def parse_min_paid(v):
     return n if n > 0 else None
 
 
+def parse_max_paid(v):
+    """Maximum-paid filter for the payout ledger: float or None.
+
+    A positive number keeps only payouts whose recorded amount is at
+    most that much (localhost GET /api/payouts?max_paid=500 answers 'which
+    bringer payments moved at most 500' when the owner caps a payout
+    band, and together with ?min_paid=N it frames the money-side value
+    band, same vocabulary as /api/codes?max_sale=); None = every payout.
+    Accepts real ints/floats for direct DB calls; blank/junk/zero/negative
+    reads as None (every payout), never an error."""
+    if isinstance(v, bool):
+        return None
+    if v is None:
+        return None
+    try:
+        n = float(v.strip() if isinstance(v, str) else v)
+    except (TypeError, ValueError, AttributeError):
+        return None
+    return n if n > 0 else None
+
+
 def is_private(ip):
     """LAN, Tailscale and loopback: places where getting in already means trust."""
     try:
@@ -1034,7 +1055,7 @@ class DB:
         return {a: {k: round(v, 9) for k, v in sorted(cur.items())}
                 for a, cur in sorted(out.items())}
 
-    def list_payouts(self, limit=100, agent=None, month=None, offset=0, day=None, currency=None, ref=None, min_paid=None):
+    def list_payouts(self, limit=100, agent=None, month=None, offset=0, day=None, currency=None, ref=None, min_paid=None, max_paid=None):
         """Off-band payout ledger, newest first, read-only.
 
         [{at, day, agent, amount, currency, ref}] over the payouts table
@@ -1075,8 +1096,13 @@ class DB:
         /api/payouts?min_paid=5 answers 'which bringer payments moved at
         least 5' without grepping the ledger, same vocabulary as
         /api/codes?min_sale=); None/blank/junk/zero/negative means every
+        payout, never an error. max_paid is the symmetric ceiling
+        (localhost GET /api/payouts?max_paid=500 answers 'which bringer
+        payments moved at most 500' without grepping the ledger, same
+        vocabulary as /api/codes?max_sale=; with ?min_paid it frames the
+        money-side value band); None/blank/junk/zero/negative means every
         payout, never an error. agent,
-        month, day, currency, ref and min_paid combine (AND)."""
+        month, day, currency, ref, min_paid and max_paid combine (AND)."""
         try:
             offset = int(offset)
         except (TypeError, ValueError):
@@ -1128,6 +1154,10 @@ class DB:
             if want_min is not None:
                 conds.append("amount>=?")
                 params.append(want_min)
+            want_max = parse_max_paid(max_paid)
+            if want_max is not None:
+                conds.append("amount<=?")
+                params.append(want_max)
             where = ("WHERE " + " AND ".join(conds)) if conds else ""
             params.append(limit)
             params.append(offset)
@@ -1141,7 +1171,7 @@ class DB:
                  "amount": r[3], "currency": r[4],
                  "ref": r[5] or ""} for r in rows]
 
-    def get_payout_totals(self, agent=None, month=None, day=None, currency=None, ref=None, min_paid=None):
+    def get_payout_totals(self, agent=None, month=None, day=None, currency=None, ref=None, min_paid=None, max_paid=None):
         """Paid-out totals over the same filter as list_payouts().
 
         {payouts, paid}: how many off-band payments the owner recorded and
@@ -1159,7 +1189,9 @@ class DB:
         as list_payouts (None/blank = every payout, case-insensitive,
         unknown refs report zeros). min_paid is the same optional value
         floor as list_payouts (None/blank/junk/zero/negative = every
-        payout, unknown floors report zeros). Totals cover the whole filter, never just the
+        payout, unknown floors report zeros). max_paid is the same
+        optional value ceiling as list_payouts (None/blank/junk/zero/negative
+        = every payout, unknown ceilings report zeros). Totals cover the whole filter, never just the
         ?limit= window of the row list. Sums round to 9 decimals
         (a lamport).
         Read-only, never an error (a book without the payouts table reads
@@ -1207,6 +1239,10 @@ class DB:
             if want_min is not None:
                 conds.append("amount>=?")
                 params.append(want_min)
+            want_max = parse_max_paid(max_paid)
+            if want_max is not None:
+                conds.append("amount<=?")
+                params.append(want_max)
             where = ("WHERE " + " AND ".join(conds)) if conds else ""
             n = self.c.execute("SELECT COUNT(*) FROM payouts " + where,
                                tuple(params)).fetchone()
@@ -1280,7 +1316,7 @@ class DB:
                 "payouts": self.list_payouts(limit, want, month, offset),
                 "totals": self.get_payout_totals(want, month)}
 
-    def payouts_csv(self, limit=100, agent=None, month=None, offset=0, day=None, currency=None, ref=None, min_paid=None):
+    def payouts_csv(self, limit=100, agent=None, month=None, offset=0, day=None, currency=None, ref=None, min_paid=None, max_paid=None):
         """Payout ledger as CSV, newest first (same rows as list_payouts).
 
         One header row plus one row per payment for the owner (localhost
@@ -1296,7 +1332,9 @@ class DB:
         (None/blank/'all' = every rail, case-insensitive) and ref the
         same optional tx-hash substring filter (None/blank = every
         payout, case-insensitive) and min_paid the same optional value
-        floor (None/blank/junk/zero/negative = every payout). offset is the
+        floor (None/blank/junk/zero/negative = every payout) and max_paid
+        the same optional value ceiling (None/blank/junk/zero/negative =
+        every payout). offset is the
         same optional row skip as
         list_payouts (paging past the 500-row cap, junk/negative reads as
         0). Read-only, never an error (empty
@@ -1307,7 +1345,7 @@ class DB:
         buf = io.StringIO(newline="")
         w = csv.writer(buf)
         w.writerow(cols)
-        for row in self.list_payouts(limit, agent, month, offset, day, currency, ref, min_paid):
+        for row in self.list_payouts(limit, agent, month, offset, day, currency, ref, min_paid, max_paid):
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
@@ -3010,8 +3048,8 @@ def make_handler(db):
                     want_cur = None
                 want_ref = parse_payout_ref(q.get("ref", [None])[0])
                 try:
-                    rows = db.list_payouts(limit, want, month, offset, day, want_cur, want_ref, q.get("min_paid", [None])[0])
-                    totals = db.get_payout_totals(want, month, day, want_cur, want_ref, q.get("min_paid", [None])[0])
+                    rows = db.list_payouts(limit, want, month, offset, day, want_cur, want_ref, q.get("min_paid", [None])[0], q.get("max_paid", [None])[0])
+                    totals = db.get_payout_totals(want, month, day, want_cur, want_ref, q.get("min_paid", [None])[0], q.get("max_paid", [None])[0])
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 mon = month.strip() if isinstance(month, str) and month.strip() else None
@@ -3028,6 +3066,7 @@ def make_handler(db):
                                      "day": dd, "currency": want_cur,
                                      "ref": want_ref,
                                      "min_paid": parse_min_paid(q.get("min_paid", [None])[0]),
+                                     "max_paid": parse_max_paid(q.get("max_paid", [None])[0]),
                                      "payouts": rows,
                                      "totals": totals})
             if u.path == "/api/payouts.csv":
@@ -3053,7 +3092,7 @@ def make_handler(db):
                     want_cur = None
                 want_ref = parse_payout_ref(q.get("ref", [None])[0])
                 try:
-                    b = db.payouts_csv(limit, want, month, offset, day, want_cur, want_ref, q.get("min_paid", [None])[0]).encode()
+                    b = db.payouts_csv(limit, want, month, offset, day, want_cur, want_ref, q.get("min_paid", [None])[0], q.get("max_paid", [None])[0]).encode()
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 self.send_response(200)
