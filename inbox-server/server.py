@@ -2040,7 +2040,7 @@ class DB:
             return []
         return [{"day": r[0], "credits": r[1], "reason": r[2]} for r in rows]
 
-    def list_grants(self, limit=100, user=None, month=None, offset=0, reason=None, min_credits=None, max_credits=None, day=None, referred_by=None):
+    def list_grants(self, limit=100, user=None, month=None, offset=0, reason=None, min_credits=None, max_credits=None, day=None, referred_by=None, code=None):
         """Manual-grant ledger for the owner, newest first, read-only.
 
         [{at, day, user_id, credits, reason, code}] over the grants table for the
@@ -2091,8 +2091,15 @@ class DB:
         owner sizes the commission rate: every grant to a user whose
         referrals row names X, manual and redeemed alike, same vocabulary
         as /api/codes?agent=); None or blank means every grant, unknown
-        bringers report []. user, month, day, reason,
-        min_credits, max_credits and referred_by combine (AND)."""
+        bringers report []. code is an optional code-substring filter on
+        the funding prepaid code stamped at redeem (localhost GET
+        /api/grants?code=EL-AB answers 'which grant did this sale pay
+        for' when support hears a pasted prefix and needs the funding row
+        without grepping the ledger, completing the 1:1 sales->credits
+        tie of the code stamp); matched case-insensitively as a
+        substring, None/blank = every grant, manual and pre-stamp rows
+        (code '') never match. user, month, day, reason,
+        min_credits, max_credits, referred_by and code combine (AND)."""
         try:
             offset = int(offset)
         except (TypeError, ValueError):
@@ -2146,6 +2153,10 @@ class DB:
             if want_ref:
                 conds.append("EXISTS(SELECT 1 FROM referrals WHERE referrals.user_id=grants.user_id AND referrals.referred_by=?)")
                 params.append(want_ref)
+            want_code = parse_code(code)
+            if want_code is not None:
+                conds.append("INSTR(lower(code), lower(?))>0")
+                params.append(want_code)
             where = ("WHERE " + " AND ".join(conds)) if conds else ""
             params.append(limit)
             params.append(offset)
@@ -2158,7 +2169,7 @@ class DB:
         return [{"at": r[0], "day": r[1], "user_id": r[2],
                  "credits": r[3], "reason": r[4] or "", "code": r[5] or ""} for r in rows]
 
-    def grants_csv(self, limit=100, user=None, month=None, offset=0, reason=None, min_credits=None, max_credits=None, day=None, referred_by=None):
+    def grants_csv(self, limit=100, user=None, month=None, offset=0, reason=None, min_credits=None, max_credits=None, day=None, referred_by=None, code=None):
         """Manual-grant ledger as CSV, newest first (same rows as list_grants).
 
         One header row plus one row per manual grant for the owner
@@ -2183,7 +2194,9 @@ class DB:
         (None/blank/'all' = every day, malformed raises ValueError for
         a 400). referred_by is the same optional bringer filter as
         list_grants (None/blank = every grant, unknown bringers header
-        only, never an error).
+        only, never an error). code is the same optional code-substring
+        filter as list_grants (None/blank = every grant, manual and
+        pre-stamp rows header only, never an error).
         New export only:
         /api/grants rows carry the same code stamp (same shape),
         grant recording, redeem, /api/usage,
@@ -2193,11 +2206,11 @@ class DB:
         buf = io.StringIO(newline="")
         w = csv.writer(buf)
         w.writerow(cols)
-        for row in self.list_grants(limit, user, month, offset, reason, min_credits, max_credits, day, referred_by):
+        for row in self.list_grants(limit, user, month, offset, reason, min_credits, max_credits, day, referred_by, code):
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
-    def get_grant_totals(self, user=None, month=None, reason=None, min_credits=None, max_credits=None, day=None, referred_by=None):
+    def get_grant_totals(self, user=None, month=None, reason=None, min_credits=None, max_credits=None, day=None, referred_by=None, code=None):
         """Granted-credit totals over the same filter as list_grants().
 
         {grants, credits}: how many manual grants and how many credits they
@@ -2219,6 +2232,9 @@ class DB:
         a 400, totals scope to the same rows). referred_by is the same
         optional bringer filter as list_grants (None/blank = every grant,
         unknown bringers report zeros, totals scope to the same rows).
+        code is the same optional code-substring filter as list_grants
+        (None/blank = every grant, manual and pre-stamp rows never match,
+        totals scope to the same rows).
         Localhost GET /api/grants serves the scoped totals as totals and
         the unfiltered whole-book liability beside them as book (the mirror
         of /api/codes, reversed: there totals stays whole-book and the
@@ -2270,6 +2286,10 @@ class DB:
             if want_ref:
                 conds.append("EXISTS(SELECT 1 FROM referrals WHERE referrals.user_id=grants.user_id AND referrals.referred_by=?)")
                 params.append(want_ref)
+            want_code = parse_code(code)
+            if want_code is not None:
+                conds.append("INSTR(lower(code), lower(?))>0")
+                params.append(want_code)
             where = ("WHERE " + " AND ".join(conds)) if conds else ""
             row = self.c.execute(
                 "SELECT COUNT(*), COALESCE(SUM(credits),0) FROM grants "
@@ -2840,9 +2860,10 @@ def make_handler(db):
                 day = q.get("day", [None])[0]
                 referrer = q.get("referred_by", [None])[0]
                 want_ref = referrer.strip()[:120] if isinstance(referrer, str) and referrer.strip() else None
+                want_code = parse_code(q.get("code", [None])[0])
                 try:
-                    rows = db.list_grants(limit, want, month, offset, want_reason, want_min, want_max, day, want_ref)
-                    totals = db.get_grant_totals(want, month, want_reason, want_min, want_max, day, want_ref)
+                    rows = db.list_grants(limit, want, month, offset, want_reason, want_min, want_max, day, want_ref, want_code)
+                    totals = db.get_grant_totals(want, month, want_reason, want_min, want_max, day, want_ref, want_code)
                     book = db.get_grant_totals()
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
@@ -2862,6 +2883,7 @@ def make_handler(db):
                                      "max_credits": want_max,
                                      "day": dd,
                                      "referred_by": want_ref,
+                                     "code": want_code,
                                      "grants": rows,
                                      "totals": totals,
                                      "book": book})
@@ -2887,8 +2909,9 @@ def make_handler(db):
                 day = q.get("day", [None])[0]
                 referrer = q.get("referred_by", [None])[0]
                 want_ref = referrer.strip()[:120] if isinstance(referrer, str) and referrer.strip() else None
+                want_code = parse_code(q.get("code", [None])[0])
                 try:
-                    b = db.grants_csv(limit, want, month, offset, want_reason, want_min, want_max, day, want_ref).encode()
+                    b = db.grants_csv(limit, want, month, offset, want_reason, want_min, want_max, day, want_ref, want_code).encode()
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 self.send_response(200)
