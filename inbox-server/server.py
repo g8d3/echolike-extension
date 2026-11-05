@@ -2206,6 +2206,11 @@ class DB:
         a 400, totals scope to the same rows). referred_by is the same
         optional bringer filter as list_grants (None/blank = every grant,
         unknown bringers report zeros, totals scope to the same rows).
+        Localhost GET /api/grants serves the scoped totals as totals and
+        the unfiltered whole-book liability beside them as book (the mirror
+        of /api/codes, reversed: there totals stays whole-book and the
+        scoped number is filtered; here totals was already scoped, so the
+        new key is the whole-book one).
         Read-only, never an error, unknown state is all zeros. New totals
         only: list_grants, grants_csv, grant recording, redeem, /api/usage,
         badge, history, codes, sales totals, payouts, statement, close
@@ -2825,6 +2830,7 @@ def make_handler(db):
                 try:
                     rows = db.list_grants(limit, want, month, offset, want_reason, want_min, want_max, day, want_ref)
                     totals = db.get_grant_totals(want, month, want_reason, want_min, want_max, day, want_ref)
+                    book = db.get_grant_totals()
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 mon = month.strip() if isinstance(month, str) and month.strip() else None
@@ -2844,7 +2850,8 @@ def make_handler(db):
                                      "day": dd,
                                      "referred_by": want_ref,
                                      "grants": rows,
-                                     "totals": totals})
+                                     "totals": totals,
+                                     "book": book})
             if u.path == "/api/grants.csv":
                 peer = (self.client_address[0] if self.client_address else "")
                 if peer not in ("127.0.0.1", "::1"):
