@@ -1536,7 +1536,7 @@ class DB:
         return None
 
     def get_month_close(self, month=None, agent=None, currency=None, day=None,
-                        min_settled=None, max_settled=None):
+                        min_settled=None, max_settled=None, offset=0):
         """One month's close per bringer, read-only.
 
         {month, commission_pct, agent, currency, day, rows:[{agent, currency, settled,
@@ -1593,7 +1593,13 @@ class DB:
         the close book); None/blank/junk/zero/negative means every row,
         never an error, and it combines with month, agent, currency, day
         and min_settled as AND. The response echoes it as max_settled (None
-        when unfiltered, mirroring min_settled). totals sums the filtered rows per currency
+        when unfiltered, mirroring min_settled). offset is an optional row
+        skip for paging a long bringer list (localhost GET
+        /api/close?month=YYYY-MM&offset=100 answers 'the next page of the
+        same close'); junk/negative reads as 0, beyond-the-book reads [],
+        totals ignore it (whole filter, never the window), and it is not
+        echoed (it only windows the row list, mirroring /api/statement).
+        totals sums the filtered rows per currency
         (settled/owed/paid/payable maps, round-9; owed/payable stay empty
         without a commission rate) plus settled_n/payouts_n counts, so the
         month reads its headline without summing rows; unknown months
@@ -1607,6 +1613,11 @@ class DB:
             want_cur = ""
         want_min = parse_min_settled(min_settled)
         want_max = parse_max_settled(max_settled)
+        try:
+            offset = int(offset)
+        except (TypeError, ValueError):
+            offset = 0
+        offset = max(0, offset)
         dd = None
         if isinstance(day, str) and day.strip().lower() == "all":
             day = None
@@ -1703,12 +1714,12 @@ class DB:
                     tot["payable"].get(cur, 0) + r["payable"], 9)
             tot["settled_n"] += r["settled_n"]
             tot["payouts_n"] += r["payouts_n"]
-        empty["rows"] = rows
+        empty["rows"] = rows[offset:]
         empty["totals"] = tot
         return empty
 
     def close_csv(self, month=None, agent=None, currency=None, day=None,
-                  min_settled=None, max_settled=None):
+                  min_settled=None, max_settled=None, offset=0):
         """One month's close as CSV, one row per bringer and currency.
 
         One header row plus one row per (agent, currency) for the owner
@@ -1717,7 +1728,9 @@ class DB:
         currency optional exact-match rail filter, blank means every rail,
         day optional exact-day filter, blank/'all' means every day,
         min_settled optional settled-value floor, max_settled optional
-        settled-value ceiling, blank/junk means every row):
+        settled-value ceiling, blank/junk means every row, offset optional
+        row skip paging the same rows as /api/close?offset= (junk/negative
+        reads as 0, totals unaffected):
         month,agent,currency,settled,owed,paid,payable,settled_n,payouts_n,
         commission_pct — the same rows get_month_close() reports, so the
         month-end reckoning reconciles in a spreadsheet without touching
@@ -1736,7 +1749,7 @@ class DB:
         w = csv.writer(buf)
         w.writerow(cols)
         close = self.get_month_close(month, agent, currency, day, min_settled,
-                                     max_settled)
+                                     max_settled, offset)
         for row in close["rows"]:
             w.writerow([close["month"], row["agent"], row["currency"],
                           row["settled"],
@@ -3436,11 +3449,16 @@ def make_handler(db):
                 month = q.get("month", [None])[0]
                 agent = q.get("agent", [None])[0]
                 try:
+                    offset = max(0, int(q.get("offset", ["0"])[0]))
+                except ValueError:
+                    offset = 0
+                try:
                     close = db.get_month_close(month, agent,
                                                q.get("currency", [None])[0],
                                                q.get("day", [None])[0],
                                                q.get("min_settled", [None])[0],
-                                               q.get("max_settled", [None])[0])
+                                               q.get("max_settled", [None])[0],
+                                               offset)
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 return self._json({"ok": True, **close})
@@ -3452,11 +3470,16 @@ def make_handler(db):
                 month = q.get("month", [None])[0]
                 agent = q.get("agent", [None])[0]
                 try:
+                    offset = max(0, int(q.get("offset", ["0"])[0]))
+                except ValueError:
+                    offset = 0
+                try:
                     b = db.close_csv(month, agent,
                                      q.get("currency", [None])[0],
                                      q.get("day", [None])[0],
                                      q.get("min_settled", [None])[0],
-                                     q.get("max_settled", [None])[0]).encode()
+                                     q.get("max_settled", [None])[0],
+                                     offset).encode()
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 self.send_response(200)
