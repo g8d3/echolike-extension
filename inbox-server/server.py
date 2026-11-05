@@ -196,6 +196,25 @@ def parse_sale_ref(v):
     return s[:200] if s else None
 
 
+def parse_payout_ref(v):
+    """Tx-hash filter for the payout ledger: str or None.
+
+    A non-blank string keeps only payouts whose recorded ref contains
+    it (localhost GET /api/payouts?ref=abc123 answers 'which payout did
+    this on-chain payment settle' when the owner sees a tx hash and
+    needs the payment without grepping the full ledger, same vocabulary
+    as /api/codes?sale_ref=); None = every payout. Matched
+    case-insensitively as a substring, so a pasted hash prefix finds the
+    full stored ref; blank/non-string reads as None (every payout), never
+    an error."""
+    if v is None:
+        return None
+    if not isinstance(v, str):
+        return None
+    s = v.strip()
+    return s[:200] if s else None
+
+
 def parse_code(v):
     """Code-substring filter for the sales book: str or None.
 
@@ -994,7 +1013,7 @@ class DB:
         return {a: {k: round(v, 9) for k, v in sorted(cur.items())}
                 for a, cur in sorted(out.items())}
 
-    def list_payouts(self, limit=100, agent=None, month=None, offset=0, day=None, currency=None):
+    def list_payouts(self, limit=100, agent=None, month=None, offset=0, day=None, currency=None, ref=None):
         """Off-band payout ledger, newest first, read-only.
 
         [{at, day, agent, amount, currency, ref}] over the payouts table
@@ -1025,8 +1044,13 @@ class DB:
         (localhost GET /api/payouts?currency=SOL answers 'what did I pay
         out on this rail' next to the per-currency paid{} totals, same
         vocabulary as /api/codes?currency=); None, blank or 'all' means
-        every rail, matching is case-insensitive (stored upper). agent,
-        month, day and currency combine (AND)."""
+        every rail, matching is case-insensitive (stored upper). ref is
+        an optional tx-hash substring filter on the recorded ref
+        (localhost GET /api/payouts?ref=abc123 answers 'which payout did
+        this on-chain payment settle' without grepping the ledger, same
+        vocabulary as /api/codes?sale_ref=); None or blank means every
+        payout, matching is case-insensitive. agent,
+        month, day, currency and ref combine (AND)."""
         try:
             offset = int(offset)
         except (TypeError, ValueError):
@@ -1070,6 +1094,10 @@ class DB:
             if want_cur:
                 conds.append("currency=?")
                 params.append(want_cur)
+            want_ref = parse_payout_ref(ref)
+            if want_ref:
+                conds.append("INSTR(lower(ref), lower(?))>0")
+                params.append(want_ref)
             where = ("WHERE " + " AND ".join(conds)) if conds else ""
             params.append(limit)
             params.append(offset)
@@ -1083,7 +1111,7 @@ class DB:
                  "amount": r[3], "currency": r[4],
                  "ref": r[5] or ""} for r in rows]
 
-    def get_payout_totals(self, agent=None, month=None, day=None, currency=None):
+    def get_payout_totals(self, agent=None, month=None, day=None, currency=None, ref=None):
         """Paid-out totals over the same filter as list_payouts().
 
         {payouts, paid}: how many off-band payments the owner recorded and
@@ -1097,7 +1125,9 @@ class DB:
         (None/blank/'all' = every day, malformed raises ValueError for
         a 400). currency is the same optional rail filter as list_payouts
         (None/blank/'all' = every rail, case-insensitive, unknown rails
-        report zeros). Totals cover the whole filter, never just the
+        report zeros). ref is the same optional tx-hash substring filter
+        as list_payouts (None/blank = every payout, case-insensitive,
+        unknown refs report zeros). Totals cover the whole filter, never just the
         ?limit= window of the row list. Sums round to 9 decimals
         (a lamport).
         Read-only, never an error (a book without the payouts table reads
@@ -1137,6 +1167,10 @@ class DB:
             if want_cur:
                 conds.append("currency=?")
                 params.append(want_cur)
+            want_ref = parse_payout_ref(ref)
+            if want_ref:
+                conds.append("INSTR(lower(ref), lower(?))>0")
+                params.append(want_ref)
             where = ("WHERE " + " AND ".join(conds)) if conds else ""
             n = self.c.execute("SELECT COUNT(*) FROM payouts " + where,
                                tuple(params)).fetchone()
@@ -1210,7 +1244,7 @@ class DB:
                 "payouts": self.list_payouts(limit, want, month, offset),
                 "totals": self.get_payout_totals(want, month)}
 
-    def payouts_csv(self, limit=100, agent=None, month=None, offset=0, day=None, currency=None):
+    def payouts_csv(self, limit=100, agent=None, month=None, offset=0, day=None, currency=None, ref=None):
         """Payout ledger as CSV, newest first (same rows as list_payouts).
 
         One header row plus one row per payment for the owner (localhost
@@ -1223,7 +1257,9 @@ class DB:
         ValueError for a 400) and day the same optional exact-day filter
         in YYYY-MM-DD (None/blank/'all' = every day, malformed raises
         ValueError for a 400) and currency the same optional rail filter
-        (None/blank/'all' = every rail, case-insensitive). offset is the
+        (None/blank/'all' = every rail, case-insensitive) and ref the
+        same optional tx-hash substring filter (None/blank = every
+        payout, case-insensitive). offset is the
         same optional row skip as
         list_payouts (paging past the 500-row cap, junk/negative reads as
         0). Read-only, never an error (empty
@@ -1234,7 +1270,7 @@ class DB:
         buf = io.StringIO(newline="")
         w = csv.writer(buf)
         w.writerow(cols)
-        for row in self.list_payouts(limit, agent, month, offset, day, currency):
+        for row in self.list_payouts(limit, agent, month, offset, day, currency, ref):
             w.writerow(["" if row.get(c) is None else row.get(c) for c in cols])
         return buf.getvalue()
 
@@ -2935,9 +2971,10 @@ def make_handler(db):
                 want_cur = cur.strip().upper() if isinstance(cur, str) and cur.strip() else None
                 if want_cur == "ALL":
                     want_cur = None
+                want_ref = parse_payout_ref(q.get("ref", [None])[0])
                 try:
-                    rows = db.list_payouts(limit, want, month, offset, day, want_cur)
-                    totals = db.get_payout_totals(want, month, day, want_cur)
+                    rows = db.list_payouts(limit, want, month, offset, day, want_cur, want_ref)
+                    totals = db.get_payout_totals(want, month, day, want_cur, want_ref)
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 mon = month.strip() if isinstance(month, str) and month.strip() else None
@@ -2952,6 +2989,7 @@ def make_handler(db):
                     dd = db._norm_day(dd)
                 return self._json({"ok": True, "agent": want, "month": mon,
                                      "day": dd, "currency": want_cur,
+                                     "ref": want_ref,
                                      "payouts": rows,
                                      "totals": totals})
             if u.path == "/api/payouts.csv":
@@ -2975,8 +3013,9 @@ def make_handler(db):
                 want_cur = cur.strip().upper() if isinstance(cur, str) and cur.strip() else None
                 if want_cur == "ALL":
                     want_cur = None
+                want_ref = parse_payout_ref(q.get("ref", [None])[0])
                 try:
-                    b = db.payouts_csv(limit, want, month, offset, day, want_cur).encode()
+                    b = db.payouts_csv(limit, want, month, offset, day, want_cur, want_ref).encode()
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 self.send_response(200)
