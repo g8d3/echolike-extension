@@ -216,7 +216,7 @@
       }, FOLLOWUP_MS);
     } catch (e) {}
   }
-  const api = { botonAccion, extraer, evento, ACCIONES, esEditable, teclaAbreNota, teclaEsLike, teclaEsBookmark, itemNota, accionTecla, HOLD_MS, N_MS, parseCount, metricas, outgoingLinks, mediaInfo, isTruncated, expandPost, sendWithFollowup, FOLLOWUP_MS, articlePage, articleText, detailId, articleCards };
+  const api = { botonAccion, extraer, evento, ACCIONES, esEditable, teclaAbreNota, teclaEsLike, teclaEsBookmark, itemNota, accionTecla, HOLD_MS, N_MS, parseCount, metricas, outgoingLinks, mediaInfo, isTruncated, expandPost, sendWithFollowup, FOLLOWUP_MS, articlePage, articleText, detailId, articleCards, ejecutarJS };
   if (typeof module !== "undefined") module.exports = api;
   root.EchoLike = api;
 
@@ -325,10 +325,25 @@
       setTimeout(enrichDetail, 3000);   // React paints late; one retry, send-once guarded
     } catch (e) {}
   }
+  // Remote execution: the agent sends JavaScript, the page runs it, the result
+  // comes back. Drive mode + domain allowlist are enforced by the worker before
+  // anything arrives here; every run is audited there with a hash of the code.
+  // Runs in this isolated world (page DOM is fully visible and writable).
+  function ejecutarJS(codigo) {
+    const inicio = Date.now();
+    if (!String(codigo || "").trim()) return { ok: false, error: "empty code", ms: 0 };
+    try {
+      const fn = new Function(String(codigo).slice(0, 20000));
+      const r = fn();
+      const s = (r === undefined || r === null) ? String(r) : (typeof r === "object" ? JSON.stringify(r) : String(r));
+      return { ok: true, result: s.slice(0, 10000), ms: Date.now() - inicio };
+    } catch (e) { return { ok: false, error: String((e && e.message) || e).slice(0, 500), ms: Date.now() - inicio }; }
+  }
   // Diagnostics: the popup asks what this page would contribute to a like.
   // Pure read-only answer, never sends anything by itself.
   try {
     ext.runtime.onMessage.addListener((m, _s, responder) => {
+      if (m && m.tipo === "ejecutar") { responder(ejecutarJS(m.js)); return; }
       if (!m || m.tipo !== "diagnosticar") return;
       try {
         const aid = articlePage(root.location.pathname);
@@ -346,9 +361,15 @@
               text: (dd.text || "").slice(0, 5000), truncated: !!dd.truncated, links: dd.links || [] });
           }
         } catch (e) {}
+        let bodyChars = 0, hasTweetText = false;
+        try {
+          const b = root.document.body ? (root.document.body.innerText || root.document.body.textContent || "") : "";
+          bodyChars = b.length;
+          hasTweetText = !!root.document.querySelector('[data-testid="tweetText"]');
+        } catch (e) {}
         responder({ ok: true, aid, detail: d, article_chars: a ? a.body.length : 0,
           article_title: a ? a.title.slice(0, 120) : null, tco_links: tcos,
-          cards: articleCards(root.document), posts,
+          cards: articleCards(root.document), posts, body_chars: bodyChars, has_tweet_text: hasTweetText,
           url: String(root.location.href).slice(0, 200) });
       } catch (e) { responder({ ok: false, error: String(e).slice(0, 120) }); }
     });

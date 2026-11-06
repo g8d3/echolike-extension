@@ -623,4 +623,49 @@ async function urlPuente() {
   } catch (e) { return null; }
 }
 
+function hashJS(s) { let h = 5381; s = String(s || ""); for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0; return h.toString(16); }
+async function ejecutarEnPestana(tabId, js, timeoutMs) {
+  const r = await Promise.race([ext.tabs.sendMessage(tabId, { tipo: "ejecutar", js }), espera(timeoutMs || DIAG_MS)]);
+  return r;
+}
+async function comandoEval(cmd) {
+  const js = String(cmd.js || "").slice(0, 20000);
+  if (!js.trim()) return { ok: false, error: "empty js" };
+  let host = "";
+  try {
+    if (cmd.url) host = new URL(cmd.url).hostname.toLowerCase();
+    else {
+      const tabs = await ext.tabs.query({ active: true, currentWindow: true });
+      const tab = tabs && tabs[0];
+      if (tab && tab.url) host = new URL(tab.url).hostname.toLowerCase();
+    }
+  } catch (e) { return { ok: false, error: "bad url" }; }
+  if (!(await puedeActuar(host))) { await auditar("rechazado", "eval " + host, "worker"); return { ok: false, error: "drive mode or domain not allowed" }; }
+  await auditar("eval", host + " #" + hashJS(js), "agent");
+  let tab = null, bg = false;
+  try {
+    if (cmd.url) {
+      tab = await ext.tabs.create({ url: cmd.url, active: false });
+      bg = true;
+      await new Promise((ok, no) => {
+        const f = (id, info) => { if (id === tab.id && info.status === "complete") { try { ext.tabs.onUpdated.removeListener(f); } catch (e) {} ok(); } };
+        try { ext.tabs.onUpdated.addListener(f); } catch (e) { ok(); }
+        setTimeout(() => no(new Error("load timeout")), 25000);
+      });
+      await new Promise((r) => setTimeout(r, 2500));
+    } else {
+      const tabs = await ext.tabs.query({ active: true, currentWindow: true });
+      tab = tabs && tabs[0];
+      if (!tab) return { ok: false, error: "no active tab" };
+    }
+    const r = await ejecutarEnPestana(tab.id, js, 20000);
+    await auditar("eval_done", host + " ok=" + !!(r && r.ok), "agent");
+    return { ok: !!(r && r.ok), result: r };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e).slice(0, 200) };
+  } finally {
+    try { if (bg && tab) await ext.tabs.remove(tab.id); } catch (e) {}
+  }
+}
+
 if (typeof module !== "undefined") module.exports = { parseCodigo, INBOX_DEFAULT, INBOX_CANDIDATES, sondear, autoconectar };
