@@ -1,5 +1,10 @@
 // EchoLike v2.2 — content script (notas escritas: mantener ~500 ms, tecla N, ✎) en x.com. Detecta clics en Like/Bookmark y los manda al background (que los guarda en local; solo los envía si el usuario activó sync).
 (function (root) {
+  // Idempotency guard: MV3 can re-inject this file (scripting.executeScript fallback,
+  // extension update/reload paths). Running the IIFE twice would stack observers,
+  // listeners and timers, multiplying CPU work and destabilizing the page.
+  if (root.__echolikeContentLoaded) return;
+  try { root.__echolikeContentLoaded = true; } catch (e) { return; }
   const ACCIONES = { like: "like", unlike: "unlike", bookmark: "bookmark", removeBookmark: "unbookmark" };
 
   function botonAccion(target) {
@@ -264,31 +269,42 @@
     return out;
   }
   let enrichDone = null;
+  const enrichSkip = new Set(); // detail ids confirmed not captured here — avoid re-reading storage
   function enrichDetail() {
     try {
       const d = detailId(root.location.pathname);
-      if (!d || enrichDone === d.id) return;
-      ext.storage.local.get({ truncated_recent: [], datos: [] }, (s) => {
+      if (!d || enrichDone === d.id || enrichSkip.has(d.id)) return;
+      // Read truncated_recent first (small). Only fall back to the full datos blob
+      // when needed; datos can be large with unlimitedStorage and repeated reads
+      // add CPU/IO pressure on a heavy SPA.
+      ext.storage.local.get({ truncated_recent: [] }, (s1) => {
         try {
-          const ent = (s.truncated_recent || []).find((x) => x && String(x.id) === d.id);
-          const known = ent ? ent.chars : (() => {
-            const it = (s.datos || []).find((x) => x && String(x.id) === d.id && (x.kind === "like" || x.kind === "bookmark"));
-            return it ? { chars: (it.text || "").length } : null;
-          })();
-          if (!known) return;   // never liked here: looking is not capturing
-          let art = null;
-          for (const a of root.document.querySelectorAll("article")) {
-            try { if (a.querySelector(`a[href$="/status/${d.id}"] time`)) { art = a; break; } } catch (e) {}
-          }
-          const like = art && art.querySelector('[data-testid="like"],[data-testid="unlike"]');
-          const d2 = like && extraer(like, root.location.pathname);
-          if (!d2 || d2.id !== d.id) return;
-          if ((d2.text || "").length > (known.chars || 0) + 20) {
-            enrichDone = d.id;
-            mandar({ v: 2, kind: "followup", clicked_at: new Date().toISOString(),
-              id: d2.id, handle: d2.handle, url: d2.url, text: d2.text,
-              tweet_time: d2.tweet_time, truncated: d2.truncated, links: d2.links, media: d2.media });
-          }
+          const ent = (s1.truncated_recent || []).find((x) => x && String(x.id) === d.id);
+          const afterKnown = (known) => {
+            if (!known) { enrichSkip.add(d.id); return; } // never liked here: looking is not capturing
+            let art = null;
+            try {
+              for (const a of root.document.querySelectorAll("article")) {
+                try { if (a.querySelector(`a[href$="/status/${d.id}"] time`)) { art = a; break; } } catch (e) {}
+              }
+            } catch (e) {}
+            const like = art && art.querySelector('[data-testid="like"],[data-testid="unlike"]');
+            const d2 = like && extraer(like, root.location.pathname);
+            if (!d2 || d2.id !== d.id) return;
+            if ((d2.text || "").length > (known.chars || 0) + 20) {
+              enrichDone = d.id;
+              mandar({ v: 2, kind: "followup", clicked_at: new Date().toISOString(),
+                id: d2.id, handle: d2.handle, url: d2.url, text: d2.text,
+                tweet_time: d2.tweet_time, truncated: d2.truncated, links: d2.links, media: d2.media });
+            }
+          };
+          if (ent) return afterKnown(ent.chars);
+          ext.storage.local.get({ datos: [] }, (s2) => {
+            try {
+              const it = (s2.datos || []).find((x) => x && String(x.id) === d.id && (x.kind === "like" || x.kind === "bookmark"));
+              afterKnown(it ? { chars: (it.text || "").length } : null);
+            } catch (e) {}
+          });
         } catch (e) {}
       });
     } catch (e) {}
@@ -422,14 +438,16 @@
     r.start();
   }
   function ponerMics() {
-    for (const like of root.document.querySelectorAll('article [data-testid="like"], article [data-testid="unlike"]')) {
-      const grupo = like.closest('[role="group"]') || like.parentElement;
-      if (!grupo || grupo.querySelector(".echolike-mic")) continue;
-      const b = root.document.createElement("button");
-      b.className = "echolike-mic"; b.type = "button"; b.title = t("micTitle"); b.textContent = "🎙";
-      b.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); grabar(b).catch((x) => { console.warn(x); b.textContent = "✗"; }); });
-      grupo.appendChild(b);
-    }
+    try {
+      for (const like of root.document.querySelectorAll('article [data-testid="like"], article [data-testid="unlike"]')) {
+        const grupo = like.closest('[role="group"]') || like.parentElement;
+        if (!grupo || grupo.querySelector(".echolike-mic")) continue;
+        const b = root.document.createElement("button");
+        b.className = "echolike-mic"; b.type = "button"; b.title = t("micTitle"); b.textContent = "🎙";
+        b.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); grabar(b).catch((x) => { console.warn(x); b.textContent = "✗"; }); });
+        grupo.appendChild(b);
+      }
+    } catch (e) {}
   }
   // ---- Nota escrita: caja en línea bajo el post ----
   let ultimoLike = null, cajaAbierta = null;
@@ -546,33 +564,46 @@
   }, true);
 
   function ponerPlumas() {
-    for (const like of root.document.querySelectorAll('article [data-testid="like"], article [data-testid="unlike"]')) {
-      const grupo = like.closest('[role="group"]') || like.parentElement;
-      if (!grupo || grupo.querySelector(".echolike-pen")) continue;
-      const b = root.document.createElement("button");
-      b.className = "echolike-pen"; b.type = "button"; b.title = t("penTitle"); b.textContent = "✎";
-      b.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); abrirCaja(b, false); });
-      grupo.appendChild(b);
-    }
+    try {
+      for (const like of root.document.querySelectorAll('article [data-testid="like"], article [data-testid="unlike"]')) {
+        const grupo = like.closest('[role="group"]') || like.parentElement;
+        if (!grupo || grupo.querySelector(".echolike-pen")) continue;
+        const b = root.document.createElement("button");
+        b.className = "echolike-pen"; b.type = "button"; b.title = t("penTitle"); b.textContent = "✎";
+        b.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); abrirCaja(b, false); });
+        grupo.appendChild(b);
+      }
+    } catch (e) {}
   }
   ext.storage.local.get({ mic: true, notas: true }, (c) => {
-    const f = () => { if (c.mic) ponerMics(); if (c.notas) ponerPlumas(); };
-    f(); new MutationObserver(f).observe(root.document.body, { childList: true, subtree: true });
+    // Throttle: X/Twitter mutates the DOM constantly; running querySelectorAll on
+    // every mutation burns CPU and can destabilize the tab. Coalesce to ~1s.
+    let pending = false;
+    const f = () => {
+      if (pending) return;
+      pending = true;
+      const run = () => { pending = false; try { if (c.mic) ponerMics(); if (c.notas) ponerPlumas(); } catch (e) {} };
+      if (typeof root.requestIdleCallback === "function") root.requestIdleCallback(run, { timeout: 1200 });
+      else setTimeout(run, 1000);
+    };
+    try { if (c.mic) ponerMics(); if (c.notas) ponerPlumas(); } catch (e) {}
+    try { new MutationObserver(f).observe(root.document.body, { childList: true, subtree: true }); } catch (e) {}
   });
   // X is an SPA: route changes (tweet -> article reader and back) never reload the
-  // page, so re-run enrichment whenever the URL moves. Debounced, send-once guarded.
+  // page, so re-run enrichment whenever the URL moves. A cheap interval beats a
+  // full-document subtree MutationObserver on X's mutation-heavy DOM.
   let lastHref = String(root.location.href);
   let navTimer = null;
-  try {
-    new MutationObserver(() => {
-      try {
-        const h = String(root.location.href);
-        if (h === lastHref) return;
-        lastHref = h;
-        clearTimeout(navTimer);
-        navTimer = setTimeout(() => { try { enrichPage(); } catch (e) {} }, 1200);
-      } catch (e) {}
-    }).observe(root.document.documentElement || root.document.body, { childList: true, subtree: true });
-  } catch (e) {}
+  function onNav() {
+    try {
+      const h = String(root.location.href);
+      if (h === lastHref) return;
+      lastHref = h;
+      clearTimeout(navTimer);
+      navTimer = setTimeout(() => { try { enrichPage(); } catch (e) {} }, 1200);
+    } catch (e) {}
+  }
+  try { root.addEventListener("popstate", onNav); } catch (e) {}
+  try { setInterval(onNav, 1500); } catch (e) {}
   try { enrichPage(); } catch (e) {}
 })(typeof window !== "undefined" ? window : globalThis);
