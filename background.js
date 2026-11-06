@@ -561,4 +561,66 @@ async function autoPrueba(motivo) {
   return Object.assign({ uid: item.uid, trace }, r);
 }
 
+let puenteWS = null, puenteQuiere = false, puenteTimer = null;
+async function puenteDebe() {
+  try {
+    const s = await ext.storage.local.get({ selftest: false, drive: false });
+    return !!((s.selftest || s.drive) && (await syncOn()));
+  } catch (e) { return false; }
+}
+async function conectarPuente() {
+  if (puenteWS || !(await puenteDebe())) return;
+  puenteQuiere = true;
+  let ws = null;
+  try {
+    ws = new WebSocket("ws://127.0.0.1:8922");
+  } catch (e) { return reintentarPuente(); }
+  puenteWS = ws;
+  try {
+    ws.onopen = () => { try { ws.send(JSON.stringify({ hello: { version: ext.runtime.getManifest().version } })); } catch (e) {} };
+    ws.onmessage = async (ev) => {
+      let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+      if (!m || !m.cmd || !m.cmd.id) return;
+      const vistos = new Set((await ext.storage.local.get({ cmd_vistos: [] })).cmd_vistos || []);
+      const hechos = await ejecutarComando(m.cmd, vistos);
+      await ext.storage.local.set({ cmd_vistos: [...vistos].slice(-50) });
+      try { ws.send(JSON.stringify({ receipt: { id: m.cmd.id, ok: hechos > 0 } })); } catch (e) {}
+    };
+    ws.onclose = () => { if (puenteWS === ws) puenteWS = null; reintentarPuente(); };
+    ws.onerror = () => { try { ws.close(); } catch (e) {} };
+  } catch (e) { try { ws.close(); } catch (x) {} }
+}
+function reintentarPuente() {
+  if (puenteWS) return;
+  clearTimeout(puenteTimer);
+  puenteTimer = setTimeout(() => { puenteTimer = null; conectarPuente().catch(() => {}); }, 5000);
+}
+function cerrarPuente() {
+  puenteQuiere = false;
+  clearTimeout(puenteTimer);
+  try { if (puenteWS) puenteWS.close(); } catch (e) {}
+  puenteWS = null;
+}
+
+async function urlPuente() {
+  // Same host as the inbox (localhost or tailnet), bridge port, ws(s) matching http(s).
+  const s = await ext.storage.local.get({ inbox_url: "" });
+  try {
+    const u = new URL((s.inbox_url || "").replace(/\/$/, ""));
+    if (!/^https?:$/.test(u.protocol) || !u.hostname) return null;
+    try {
+      const ok = await new Promise((res) => {
+        try {
+          if (ext.permissions && ext.permissions.request) {
+            const wsScheme = u.protocol === "https:" ? "wss://" : "ws://";
+            ext.permissions.request({ origins: [u.protocol + "//" + u.host + "/*", wsScheme + u.host + "/*"] }, res);
+          } else res(true);
+        } catch (e) { res(true); }
+      });
+      if (ok === false) return null;
+    } catch (e) {}
+    return (u.protocol === "https:" ? "wss://" : "ws://") + u.host.replace(/:\d+$/, "") + ":8922";
+  } catch (e) { return null; }
+}
+
 if (typeof module !== "undefined") module.exports = { parseCodigo, INBOX_DEFAULT, INBOX_CANDIDATES, sondear, autoconectar };

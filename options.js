@@ -285,3 +285,4 @@ async function probar() {
   pintar();
   setTimeout(async () => { await send({ tipo: "acuses" }); pintar(); }, 8000);
 }
+const fechaHora = (s) => { try { return s ? new Date(s).toLocaleString([], { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : ""; } catch (e) { return String(s || ""); } };

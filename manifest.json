@@ -21,6 +21,8 @@
   ],
   "host_permissions": [
     "https://ntfy.sh/*",
+    "ws://127.0.0.1/*",
+    "http://127.0.0.1/*",
     "https://t.co/*",
     "https://x.com/*",
     "https://twitter.com/*",
