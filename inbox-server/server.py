@@ -456,6 +456,28 @@ def parse_reckoning_limit(v):
     return n if n > 0 else None
 
 
+def parse_close_limit(v):
+    """Page-size cap for the owner month-end close: int or None.
+
+    A positive integer caps how many (agent, currency) rows the served
+    close holds (localhost GET /api/close?month=YYYY-MM&offset=100&limit=10
+    answers 'the next ten bringers' once a month pushes past the 100-row
+    cap; with ?offset=N it pages the close instead of scrolling it);
+    None = the whole close. Accepts real ints for direct DB calls;
+    blank/junk/zero/negative/bool reads as None (no cap), never an
+    error, and the cap is not echoed, so no param keeps the previous
+    rows byte-identical."""
+    if isinstance(v, bool):
+        return None
+    if v is None:
+        return None
+    try:
+        n = int(v.strip() if isinstance(v, str) else v)
+    except (TypeError, ValueError, AttributeError):
+        return None
+    return n if n > 0 else None
+
+
 def is_private(ip):
     """LAN, Tailscale and loopback: places where getting in already means trust."""
     try:
@@ -1604,7 +1626,8 @@ class DB:
         return None
 
     def get_month_close(self, month=None, agent=None, currency=None, day=None,
-                        min_settled=None, max_settled=None, offset=0):
+                        min_settled=None, max_settled=None, offset=0,
+                        limit=None):
         """One month's close per bringer, read-only.
 
         {month, commission_pct, agent, currency, day, rows:[{agent, currency, settled,
@@ -1667,6 +1690,11 @@ class DB:
         same close'); junk/negative reads as 0, beyond-the-book reads [],
         totals ignore it (whole filter, never the window), and it is not
         echoed (it only windows the row list, mirroring /api/statement).
+        limit is an optional page-size cap over the served rows (localhost
+        GET /api/close?month=YYYY-MM&offset=100&limit=10 answers 'the next
+        ten bringers' once a month pushes past the 100-row cap; blank/junk/
+        zero/negative/bool reads as no cap, never an error, and it is not
+        echoed either, so no param keeps the previous rows byte-identical).
         totals sums the filtered rows per currency
         (settled/owed/paid/payable maps, round-9; owed/payable stay empty
         without a commission rate) plus settled_n/payouts_n counts, so the
@@ -1783,11 +1811,15 @@ class DB:
             tot["settled_n"] += r["settled_n"]
             tot["payouts_n"] += r["payouts_n"]
         empty["rows"] = rows[offset:]
+        want_n = parse_close_limit(limit)
+        if want_n is not None:
+            empty["rows"] = empty["rows"][:want_n]
         empty["totals"] = tot
         return empty
 
     def close_csv(self, month=None, agent=None, currency=None, day=None,
-                  min_settled=None, max_settled=None, offset=0):
+                  min_settled=None, max_settled=None, offset=0,
+                  limit=None):
         """One month's close as CSV, one row per bringer and currency.
 
         One header row plus one row per (agent, currency) for the owner
@@ -1798,7 +1830,9 @@ class DB:
         min_settled optional settled-value floor, max_settled optional
         settled-value ceiling, blank/junk means every row, offset optional
         row skip paging the same rows as /api/close?offset= (junk/negative
-        reads as 0, totals unaffected):
+        reads as 0, totals unaffected), limit optional page-size cap paging
+        the same rows as /api/close?limit= (blank/junk/zero/negative/bool
+        reads as no cap):
         month,agent,currency,settled,owed,paid,payable,settled_n,payouts_n,
         commission_pct — the same rows get_month_close() reports, so the
         month-end reckoning reconciles in a spreadsheet without touching
@@ -1817,7 +1851,7 @@ class DB:
         w = csv.writer(buf)
         w.writerow(cols)
         close = self.get_month_close(month, agent, currency, day, min_settled,
-                                     max_settled, offset)
+                                     max_settled, offset, limit)
         for row in close["rows"]:
             w.writerow([close["month"], row["agent"], row["currency"],
                           row["settled"],
@@ -3593,7 +3627,8 @@ def make_handler(db):
                                                q.get("day", [None])[0],
                                                q.get("min_settled", [None])[0],
                                                q.get("max_settled", [None])[0],
-                                               offset)
+                                               offset,
+                                               q.get("limit", [None])[0])
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 return self._json({"ok": True, **close})
@@ -3614,7 +3649,8 @@ def make_handler(db):
                                      q.get("day", [None])[0],
                                      q.get("min_settled", [None])[0],
                                      q.get("max_settled", [None])[0],
-                                     offset).encode()
+                                     offset,
+                                     q.get("limit", [None])[0]).encode()
                 except ValueError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
                 self.send_response(200)
