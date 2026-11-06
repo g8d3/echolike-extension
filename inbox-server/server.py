@@ -434,6 +434,28 @@ def parse_max_spent(v):
     return n if n > 0 else None
 
 
+def parse_reckoning_limit(v):
+    """Page-size cap for the owner reckoning top-up table: int or None.
+
+    A positive integer caps how many by_buyer rows the served window
+    holds (localhost GET /api/reckoning?offset=100&limit=10 answers
+    'the next ten buyers' once the table pushes past the 100-row cap;
+    with ?offset=N it pages the bill-first queue instead of scrolling
+    it); None = the whole window. Accepts real ints for direct DB
+    calls; blank/junk/zero/negative/bool reads as None (no cap), never
+    an error, and the cap is not echoed, so no param keeps the previous
+    rows byte-identical."""
+    if isinstance(v, bool):
+        return None
+    if v is None:
+        return None
+    try:
+        n = int(v.strip() if isinstance(v, str) else v)
+    except (TypeError, ValueError, AttributeError):
+        return None
+    return n if n > 0 else None
+
+
 def is_private(ip):
     """LAN, Tailscale and loopback: places where getting in already means trust."""
     try:
@@ -2774,7 +2796,7 @@ class DB:
         return {"grants": row[0] if row else 0, "credits": row[1] if row else 0}
 
     def get_reckoning(self, needs_topup_only=False, min_spent=None,
-                      max_spent=None, offset=0):
+                      max_spent=None, offset=0, limit=None):
         """Whole cash register in one read, newest shape additive only.
 
         {sales, payouts, grants, quota}: the three whole-book totals side by side
@@ -2821,7 +2843,14 @@ class DB:
         /api/reckoning?offset=100 answers 'the next page of buyers' once
         the table pushes past the 100-row cap; junk/negative/bool reads
         as 0, beyond-the-table reads [], never an error, not echoed, so
-        no param keeps the previous rows byte-identical). needs_topup_n
+        no param keeps the previous rows byte-identical). limit is an
+        optional page-size cap over the served top-up table (localhost
+        GET /api/reckoning?offset=100&limit=10 answers 'the next ten
+        buyers' once the table grows; blank/junk/zero/negative/bool
+        reads as no cap, never an error, not echoed either). The five
+        windows combine
+        (AND): the bill-first queue inside one money band, paged.
+        needs_topup_n
         counts the served window in every case.
         Read-only, never an error, empty
         book reads zeros.
@@ -2876,6 +2905,9 @@ class DB:
             except (TypeError, ValueError):
                 off = 0
         quota["by_buyer"] = by_buyer[off:]
+        want_n = parse_reckoning_limit(limit)
+        if want_n is not None:
+            quota["by_buyer"] = quota["by_buyer"][:want_n]
         try:
             quota["needs_topup_n"] = sum(
                 1 for e in quota.get("by_buyer") or []
@@ -2885,7 +2917,7 @@ class DB:
         return {"sales": sales, "payouts": payouts, "grants": grants, "quota": quota}
 
     def reckoning_csv(self, needs_topup_only=False, min_spent=None,
-                      max_spent=None, offset=0):
+                      max_spent=None, offset=0, limit=None):
         """Whole cash register as CSV, one summary row per figure.
 
         One header row plus one row per figure for the owner (localhost
@@ -2925,6 +2957,9 @@ class DB:
         (localhost GET /api/reckoning.csv?offset=100; junk reads as 0,
         same vocabulary as /api/close.csv?offset=; the four windows
         combine)
+        and limit=N serves at most N served buyers (localhost GET
+        /api/reckoning.csv?offset=100&limit=10; junk reads as no cap;
+        the five windows combine)
         while every aggregate row — sales,
         commission, payouts, grants, would_block totals and
         needs_topup_buyers (which then counts the served
@@ -2936,7 +2971,7 @@ class DB:
         w = csv.writer(buf)
         w.writerow(cols)
         try:
-            r = self.get_reckoning(needs_topup_only, min_spent, max_spent, offset)
+            r = self.get_reckoning(needs_topup_only, min_spent, max_spent, offset, limit)
         except sqlite3.Error:
             r = {"sales": {}, "payouts": {}, "grants": {}, "quota": {}}
         sales = r.get("sales") or {}
@@ -3597,7 +3632,8 @@ def make_handler(db):
                 floor = parse_min_spent((q.get("min_spent", [""])[0] or "").strip() or None)
                 ceil = parse_max_spent((q.get("max_spent", [""])[0] or "").strip() or None)
                 offset = q.get("offset", [None])[0]
-                return self._json({"ok": True, **db.get_reckoning(flag, floor, ceil, offset)})
+                limit = q.get("limit", [None])[0]
+                return self._json({"ok": True, **db.get_reckoning(flag, floor, ceil, offset, limit)})
             if u.path == "/api/reckoning.csv":
                 peer = (self.client_address[0] if self.client_address else "")
                 if peer not in ("127.0.0.1", "::1"):
@@ -3607,7 +3643,8 @@ def make_handler(db):
                 floor = parse_min_spent((q.get("min_spent", [""])[0] or "").strip() or None)
                 ceil = parse_max_spent((q.get("max_spent", [""])[0] or "").strip() or None)
                 offset = q.get("offset", [None])[0]
-                b = db.reckoning_csv(flag, floor, ceil, offset).encode()
+                limit = q.get("limit", [None])[0]
+                b = db.reckoning_csv(flag, floor, ceil, offset, limit).encode()
                 self.send_response(200)
                 self.send_header("content-type", "text/csv; charset=utf-8")
                 self.send_header("content-length", str(len(b)))
